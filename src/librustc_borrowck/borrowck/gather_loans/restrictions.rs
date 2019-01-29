@@ -1,13 +1,3 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 //! Computes the restrictions that result from a borrow.
 
 use borrowck::*;
@@ -67,6 +57,12 @@ impl<'a, 'tcx> RestrictionsContext<'a, 'tcx> {
                 // are inherently non-aliasable, they can only be
                 // accessed later through the borrow itself and hence
                 // must inherently comply with its terms.
+                RestrictionResult::Safe
+            }
+
+            Categorization::ThreadLocal(..) => {
+                // Thread-locals are statics that have a scope, with
+                // no underlying structure to provide restrictions.
                 RestrictionResult::Safe
             }
 

@@ -1,13 +1,3 @@
-// Copyright 2012-2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 use hir;
 use hir::def_id::DefId;
 use hir::map::DefPathHash;
@@ -36,6 +26,11 @@ pub struct TraitDef {
 
     pub has_auto_impl: bool,
 
+    /// If `true`, then this trait has the `#[marker]` attribute, indicating
+    /// that all its associated items have defaults that cannot be overridden,
+    /// and thus `impl`s of it are allowed to overlap.
+    pub is_marker: bool,
+
     /// The ICH of this trait's DefPath, cached here so it doesn't have to be
     /// recomputed all the time.
     pub def_path_hash: DefPathHash,
@@ -53,13 +48,15 @@ impl<'a, 'gcx, 'tcx> TraitDef {
                unsafety: hir::Unsafety,
                paren_sugar: bool,
                has_auto_impl: bool,
+               is_marker: bool,
                def_path_hash: DefPathHash)
                -> TraitDef {
         TraitDef {
             def_id,
-            paren_sugar,
             unsafety,
+            paren_sugar,
             has_auto_impl,
+            is_marker,
             def_path_hash,
         }
     }
@@ -131,12 +128,19 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
                 }
             }
         } else {
-            for v in impls.non_blanket_impls.values() {
-                for &impl_def_id in v {
-                    f(impl_def_id);
-                }
+            for &impl_def_id in impls.non_blanket_impls.values().flatten() {
+                f(impl_def_id);
             }
         }
+    }
+
+    /// Return a vector containing all impls
+    pub fn all_impls(self, def_id: DefId) -> Vec<DefId> {
+        let impls = self.trait_impls_of(def_id);
+
+        impls.blanket_impls.iter().chain(
+            impls.non_blanket_impls.values().flatten()
+        ).cloned().collect()
     }
 }
 
@@ -157,9 +161,9 @@ pub(super) fn trait_impls_of_provider<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                 fast_reject::simplify_type(tcx, impl_self_ty, false)
             {
                 impls.non_blanket_impls
-                    .entry(simplified_self_ty)
-                    .or_default()
-                    .push(impl_def_id);
+                     .entry(simplified_self_ty)
+                     .or_default()
+                     .push(impl_def_id);
             } else {
                 impls.blanket_impls.push(impl_def_id);
             }
@@ -175,8 +179,8 @@ pub(super) fn trait_impls_of_provider<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
             }
         }
 
-        for &node_id in tcx.hir.trait_impls(trait_id) {
-            add_impl(tcx.hir.local_def_id(node_id));
+        for &node_id in tcx.hir().trait_impls(trait_id) {
+            add_impl(tcx.hir().local_def_id(node_id));
         }
     }
 

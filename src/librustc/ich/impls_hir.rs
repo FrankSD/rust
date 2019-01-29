@@ -1,13 +1,3 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 //! This module contains `HashStable` implementations for various HIR data
 //! types in no particular order.
 
@@ -79,7 +69,14 @@ impl<'a> ToStableHashKey<StableHashingContext<'a>> for CrateNum {
     }
 }
 
-impl_stable_hash_for!(tuple_struct hir::ItemLocalId { index });
+impl<'a> HashStable<StableHashingContext<'a>> for hir::ItemLocalId {
+    #[inline]
+    fn hash_stable<W: StableHasherResult>(&self,
+                                          hcx: &mut StableHashingContext<'a>,
+                                          hasher: &mut StableHasher<W>) {
+        self.as_u32().hash_stable(hcx, hasher);
+    }
+}
 
 impl<'a> ToStableHashKey<StableHashingContext<'a>>
 for hir::ItemLocalId {
@@ -144,7 +141,8 @@ impl<'a> HashStable<StableHashingContext<'a>> for hir::ImplItemId {
 
 impl_stable_hash_for!(enum hir::ParamName {
     Plain(name),
-    Fresh(index)
+    Fresh(index),
+    Error,
 });
 
 impl_stable_hash_for!(enum hir::LifetimeName {
@@ -152,9 +150,10 @@ impl_stable_hash_for!(enum hir::LifetimeName {
     Implicit,
     Underscore,
     Static,
+    Error,
 });
 
-impl_stable_hash_for!(struct hir::Label {
+impl_stable_hash_for!(struct ast::Label {
     ident
 });
 
@@ -172,6 +171,8 @@ impl_stable_hash_for!(struct hir::Path {
 
 impl_stable_hash_for!(struct hir::PathSegment {
     ident -> (ident.name),
+    id,
+    def,
     infer_types,
     args
 });
@@ -207,14 +208,21 @@ impl_stable_hash_for!(struct hir::GenericParam {
     kind
 });
 
+impl_stable_hash_for!(enum hir::LifetimeParamKind {
+    Explicit,
+    InBand,
+    Elided,
+    Error,
+});
+
 impl<'a> HashStable<StableHashingContext<'a>> for hir::GenericParamKind {
     fn hash_stable<W: StableHasherResult>(&self,
                                           hcx: &mut StableHashingContext<'a>,
                                           hasher: &mut StableHasher<W>) {
         mem::discriminant(self).hash_stable(hcx, hasher);
         match self {
-            hir::GenericParamKind::Lifetime { in_band } => {
-                in_band.hash_stable(hcx, hasher);
+            hir::GenericParamKind::Lifetime { kind } => {
+                kind.hash_stable(hcx, hasher);
             }
             hir::GenericParamKind::Type { ref default, synthetic } => {
                 default.hash_stable(hcx, hasher);
@@ -339,6 +347,7 @@ impl_stable_hash_for!(enum hir::TyKind {
     Never,
     Tup(ts),
     Path(qpath),
+    Def(it, lt),
     TraitObject(trait_refs, lifetime),
     Typeof(body_id),
     Err,
@@ -349,12 +358,20 @@ impl_stable_hash_for!(struct hir::FnDecl {
     inputs,
     output,
     variadic,
-    has_implicit_self
+    implicit_self
 });
 
 impl_stable_hash_for!(enum hir::FunctionRetTy {
     DefaultReturn(span),
     Return(t)
+});
+
+impl_stable_hash_for!(enum hir::ImplicitSelfKind {
+    Imm,
+    Mut,
+    ImmRef,
+    MutRef,
+    None
 });
 
 impl_stable_hash_for!(struct hir::TraitRef {
@@ -393,7 +410,6 @@ impl_stable_hash_for!(struct hir::Block {
     rules,
     span,
     targeted_by_break,
-    recovered,
 });
 
 impl_stable_hash_for!(struct hir::Pat {
@@ -467,7 +483,12 @@ impl_stable_hash_for!(enum hir::UnOp {
     UnNeg
 });
 
-impl_stable_hash_for_spanned!(hir::StmtKind);
+impl_stable_hash_for!(struct hir::Stmt {
+    id,
+    node,
+    span,
+});
+
 
 impl_stable_hash_for!(struct hir::Local {
     pat,
@@ -480,17 +501,15 @@ impl_stable_hash_for!(struct hir::Local {
     source
 });
 
-impl_stable_hash_for_spanned!(hir::DeclKind);
-impl_stable_hash_for!(enum hir::DeclKind {
-    Local(local),
-    Item(item_id)
-});
-
 impl_stable_hash_for!(struct hir::Arm {
     attrs,
     pats,
     guard,
     body
+});
+
+impl_stable_hash_for!(enum hir::Guard {
+    If(expr),
 });
 
 impl_stable_hash_for!(struct hir::Field {
@@ -571,7 +590,8 @@ impl_stable_hash_for!(enum hir::ExprKind {
     InlineAsm(asm, inputs, outputs),
     Struct(path, fields, base),
     Repeat(val, times),
-    Yield(val)
+    Yield(val),
+    Err
 });
 
 impl_stable_hash_for!(enum hir::LocalSource {
@@ -776,7 +796,7 @@ impl<'a> HashStable<StableHashingContext<'a>> for hir::Mod {
             .iter()
             .map(|id| {
                 let (def_path_hash, local_id) = id.id.to_stable_hash_key(hcx);
-                debug_assert_eq!(local_id, hir::ItemLocalId(0));
+                debug_assert_eq!(local_id, hir::ItemLocalId::from_u32(0));
                 def_path_hash.0
             }).fold(Fingerprint::ZERO, |a, b| {
                 a.combine_commutative(b)
@@ -797,7 +817,7 @@ impl_stable_hash_for!(struct hir::EnumDef {
 });
 
 impl_stable_hash_for!(struct hir::VariantKind {
-    name,
+    ident -> (ident.name),
     attrs,
     data,
     disr_expr
@@ -831,7 +851,7 @@ impl<'a> HashStable<StableHashingContext<'a>> for hir::Item {
                                           hcx: &mut StableHashingContext<'a>,
                                           hasher: &mut StableHasher<W>) {
         let hir::Item {
-            name,
+            ident,
             ref attrs,
             id: _,
             hir_id: _,
@@ -841,7 +861,7 @@ impl<'a> HashStable<StableHashingContext<'a>> for hir::Item {
         } = *self;
 
         hcx.hash_hir_item_like(|hcx| {
-            name.hash_stable(hcx, hasher);
+            ident.name.hash_stable(hcx, hasher);
             attrs.hash_stable(hcx, hasher);
             node.hash_stable(hcx, hasher);
             vis.hash_stable(hcx, hasher);
@@ -905,7 +925,7 @@ impl<'a> HashStable<StableHashingContext<'a>> for hir::AssociatedItemKind {
 }
 
 impl_stable_hash_for!(struct hir::ForeignItem {
-    name,
+    ident -> (ident.name),
     attrs,
     node,
     id,
@@ -920,9 +940,10 @@ impl_stable_hash_for!(enum hir::ForeignItemKind {
 });
 
 impl_stable_hash_for!(enum hir::StmtKind {
-    Decl(decl, id),
-    Expr(expr, id),
-    Semi(expr, id)
+    Local(local),
+    Item(item_id),
+    Expr(expr),
+    Semi(expr)
 });
 
 impl_stable_hash_for!(struct hir::Arg {
@@ -964,7 +985,8 @@ impl<'a> ToStableHashKey<StableHashingContext<'a>> for hir::BodyId {
 impl_stable_hash_for!(struct hir::InlineAsmOutput {
     constraint,
     is_rw,
-    is_indirect
+    is_indirect,
+    span
 });
 
 impl_stable_hash_for!(struct hir::GlobalAsm {
@@ -994,6 +1016,7 @@ impl_stable_hash_for!(enum hir::def::NonMacroAttrKind {
     Builtin,
     Tool,
     DeriveHelper,
+    LegacyPluginHelper,
     Custom,
 });
 
@@ -1017,6 +1040,7 @@ impl_stable_hash_for!(enum hir::def::Def {
     Const(def_id),
     Static(def_id, is_mutbl),
     StructCtor(def_id, ctor_kind),
+    SelfCtor(impl_def_id),
     VariantCtor(def_id, ctor_kind),
     Method(def_id),
     AssociatedConst(def_id),
@@ -1135,7 +1159,9 @@ impl<'a> ToStableHashKey<StableHashingContext<'a>> for hir::TraitCandidate {
 impl_stable_hash_for!(struct hir::CodegenFnAttrs {
     flags,
     inline,
+    optimize,
     export_name,
+    link_name,
     target_features,
     linkage,
     link_section,
@@ -1151,6 +1177,14 @@ impl<'hir> HashStable<StableHashingContext<'hir>> for hir::CodegenFnAttrFlags
 }
 
 impl<'hir> HashStable<StableHashingContext<'hir>> for attr::InlineAttr {
+    fn hash_stable<W: StableHasherResult>(&self,
+                                          hcx: &mut StableHashingContext<'hir>,
+                                          hasher: &mut StableHasher<W>) {
+        mem::discriminant(self).hash_stable(hcx, hasher);
+    }
+}
+
+impl<'hir> HashStable<StableHashingContext<'hir>> for attr::OptimizeAttr {
     fn hash_stable<W: StableHasherResult>(&self,
                                           hcx: &mut StableHashingContext<'hir>,
                                           hasher: &mut StableHasher<W>) {

@@ -1,13 +1,3 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 // This module contains some shared code for encoding and decoding various
 // things from the `ty` module, and in particular implements support for
 // "shorthands" which allow to have pointers back into the already encoded
@@ -92,7 +82,7 @@ pub fn encode_with_shorthand<E, T, M>(encoder: &mut E,
     let leb128_bits = len * 7;
 
     // Check that the shorthand is a not longer than the
-    // full encoding itself, i.e. it's an obvious win.
+    // full encoding itself, i.e., it's an obvious win.
     if leb128_bits >= 64 || (shorthand as u64) < (1 << leb128_bits) {
         cache(encoder).insert(value.clone(), shorthand);
     }
@@ -109,8 +99,9 @@ pub fn encode_predicates<'tcx, E, C>(encoder: &mut E,
 {
     predicates.parent.encode(encoder)?;
     predicates.predicates.len().encode(encoder)?;
-    for predicate in &predicates.predicates {
-        encode_with_shorthand(encoder, predicate, &cache)?
+    for (predicate, span) in &predicates.predicates {
+        encode_with_shorthand(encoder, predicate, &cache)?;
+        span.encode(encoder)?;
     }
     Ok(())
 }
@@ -177,18 +168,19 @@ pub fn decode_predicates<'a, 'tcx, D>(decoder: &mut D)
     Ok(ty::GenericPredicates {
         parent: Decodable::decode(decoder)?,
         predicates: (0..decoder.read_usize()?).map(|_| {
-                // Handle shorthands first, if we have an usize > 0x80.
-                if decoder.positioned_at_shorthand() {
-                    let pos = decoder.read_usize()?;
-                    assert!(pos >= SHORTHAND_OFFSET);
-                    let shorthand = pos - SHORTHAND_OFFSET;
+            // Handle shorthands first, if we have an usize > 0x80.
+            let predicate = if decoder.positioned_at_shorthand() {
+                let pos = decoder.read_usize()?;
+                assert!(pos >= SHORTHAND_OFFSET);
+                let shorthand = pos - SHORTHAND_OFFSET;
 
-                    decoder.with_position(shorthand, ty::Predicate::decode)
-                } else {
-                    ty::Predicate::decode(decoder)
-                }
-            })
-            .collect::<Result<Vec<_>, _>>()?,
+                decoder.with_position(shorthand, ty::Predicate::decode)
+            } else {
+                ty::Predicate::decode(decoder)
+            }?;
+            Ok((predicate, Decodable::decode(decoder)?))
+        })
+        .collect::<Result<Vec<_>, _>>()?,
     })
 }
 
@@ -255,17 +247,17 @@ pub fn decode_canonical_var_infos<'a, 'tcx, D>(decoder: &mut D)
 }
 
 #[inline]
-pub fn decode_const<'a, 'tcx, D>(decoder: &mut D)
-                                 -> Result<&'tcx ty::Const<'tcx>, D::Error>
+pub fn decode_lazy_const<'a, 'tcx, D>(decoder: &mut D)
+                                 -> Result<&'tcx ty::LazyConst<'tcx>, D::Error>
     where D: TyDecoder<'a, 'tcx>,
           'tcx: 'a,
 {
-    Ok(decoder.tcx().mk_const(Decodable::decode(decoder)?))
+    Ok(decoder.tcx().intern_lazy_const(Decodable::decode(decoder)?))
 }
 
 #[inline]
 pub fn decode_allocation<'a, 'tcx, D>(decoder: &mut D)
-                                 -> Result<&'tcx Allocation, D::Error>
+    -> Result<&'tcx Allocation, D::Error>
     where D: TyDecoder<'a, 'tcx>,
           'tcx: 'a,
 {
@@ -318,7 +310,7 @@ macro_rules! implement_ty_decoder {
                     read_f64 -> f64;
                     read_f32 -> f32;
                     read_char -> char;
-                    read_str -> Cow<str>;
+                    read_str -> Cow<'_, str>;
                 }
 
                 fn error(&mut self, err: &str) -> Self::Error {
@@ -397,10 +389,10 @@ macro_rules! implement_ty_decoder {
                 }
             }
 
-            impl<$($typaram),*> SpecializedDecoder<&'tcx $crate::ty::Const<'tcx>>
+            impl<$($typaram),*> SpecializedDecoder<&'tcx $crate::ty::LazyConst<'tcx>>
             for $DecoderName<$($typaram),*> {
-                fn specialized_decode(&mut self) -> Result<&'tcx ty::Const<'tcx>, Self::Error> {
-                    decode_const(self)
+                fn specialized_decode(&mut self) -> Result<&'tcx ty::LazyConst<'tcx>, Self::Error> {
+                    decode_lazy_const(self)
                 }
             }
 
@@ -415,4 +407,3 @@ macro_rules! implement_ty_decoder {
         }
     }
 }
-

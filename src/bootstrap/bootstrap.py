@@ -1,13 +1,3 @@
-# Copyright 2015-2016 The Rust Project Developers. See the COPYRIGHT
-# file at the top-level directory of this distribution and at
-# http://rust-lang.org/COPYRIGHT.
-#
-# Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-# http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-# <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-# option. This file may not be copied, modified, or distributed
-# except according to those terms.
-
 from __future__ import absolute_import, division, print_function
 import argparse
 import contextlib
@@ -79,8 +69,8 @@ def _download(path, url, probably_big, verbose, exception):
     # see http://serverfault.com/questions/301128/how-to-download
     if sys.platform == 'win32':
         run(["PowerShell.exe", "/nologo", "-Command",
-             "(New-Object System.Net.WebClient)"
-             ".DownloadFile('{}', '{}')".format(url, path)],
+             "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12;",
+             "(New-Object System.Net.WebClient).DownloadFile('{}', '{}')".format(url, path)],
             verbose=verbose,
             exception=exception)
     else:
@@ -240,6 +230,9 @@ def default_build_triple():
         err = "unknown OS type: {}".format(ostype)
         sys.exit(err)
 
+    if cputype == 'powerpc' and ostype == 'unknown-freebsd':
+        cputype = subprocess.check_output(
+              ['uname', '-p']).strip().decode(default_encoding)
     cputype_mapper = {
         'BePC': 'i686',
         'aarch64': 'aarch64',
@@ -594,7 +587,7 @@ class RustBuild(object):
         return ''
 
     def bootstrap_binary(self):
-        """Return the path of the boostrap binary
+        """Return the path of the bootstrap binary
 
         >>> rb = RustBuild()
         >>> rb.build_dir = "build"
@@ -632,6 +625,9 @@ class RustBuild(object):
             target_features += ["-crt-static"]
         if target_features:
             env["RUSTFLAGS"] += "-C target-feature=" + (",".join(target_features)) + " "
+        target_linker = self.get_toml("linker", build_section)
+        if target_linker is not None:
+            env["RUSTFLAGS"] += "-C linker=" + target_linker + " "
 
         env["PATH"] = os.path.join(self.bin_root(), "bin") + \
             os.pathsep + env["PATH"]
@@ -678,7 +674,7 @@ class RustBuild(object):
         run(["git", "submodule", "-q", "sync", module],
             cwd=self.rust_root, verbose=self.verbose)
         run(["git", "submodule", "update",
-            "--init", "--recursive", module],
+            "--init", "--recursive", "--progress", module],
             cwd=self.rust_root, verbose=self.verbose)
         run(["git", "reset", "-q", "--hard"],
             cwd=module_path, verbose=self.verbose)
@@ -705,25 +701,12 @@ class RustBuild(object):
         filtered_submodules = []
         submodules_names = []
         for module in submodules:
-            if module.endswith("llvm"):
-                if self.get_toml('llvm-config'):
+            if module.endswith("llvm-project"):
+                if self.get_toml('llvm-config') and self.get_toml('lld') != 'true':
                     continue
             if module.endswith("llvm-emscripten"):
                 backends = self.get_toml('codegen-backends')
                 if backends is None or not 'emscripten' in backends:
-                    continue
-            if module.endswith("jemalloc"):
-                if self.get_toml('use-jemalloc') == 'false':
-                    continue
-                if self.get_toml('jemalloc'):
-                    continue
-            if module.endswith("lld"):
-                config = self.get_toml('lld')
-                if config is None or config == 'false':
-                    continue
-            if module.endswith("lldb") or module.endswith("clang"):
-                config = self.get_toml('lldb')
-                if config is None or config == 'false':
                     continue
             check = self.check_submodule(module, slow_submodules)
             filtered_submodules.append((module, check))
@@ -803,7 +786,7 @@ def bootstrap(help_triggered):
                 registry = 'https://example.com'
 
                 [source.vendored-sources]
-                directory = '{}/src/vendor'
+                directory = '{}/vendor'
             """.format(build.rust_root))
     else:
         if os.path.exists('.cargo'):
@@ -844,6 +827,11 @@ def bootstrap(help_triggered):
 def main():
     """Entry point for the bootstrap process"""
     start_time = time()
+
+    # x.py help <cmd> ...
+    if len(sys.argv) > 1 and sys.argv[1] == 'help':
+        sys.argv = sys.argv[:1] + [sys.argv[2], '-h'] + sys.argv[3:]
+
     help_triggered = (
         '-h' in sys.argv) or ('--help' in sys.argv) or (len(sys.argv) == 1)
     try:

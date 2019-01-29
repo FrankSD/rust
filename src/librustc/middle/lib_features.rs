@@ -1,16 +1,6 @@
-// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
+// Detecting lib features (i.e., features that are not lang features).
 //
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
-// Detecting lib features (i.e. features that are not lang features).
-//
-// These are declared using stability attributes (e.g. `#[stable (..)]`
+// These are declared using stability attributes (e.g., `#[stable (..)]`
 // and `#[unstable (..)]`), but are not declared in one single location
 // (unlike lang features), which means we need to collect them instead.
 
@@ -31,8 +21,8 @@ pub struct LibFeatures {
 impl LibFeatures {
     fn new() -> LibFeatures {
         LibFeatures {
-            stable: FxHashMap(),
-            unstable: FxHashSet(),
+            stable: Default::default(),
+            unstable: Default::default(),
         }
     }
 
@@ -61,7 +51,7 @@ impl<'a, 'tcx> LibFeatureCollector<'a, 'tcx> {
     fn extract(&self, attr: &Attribute) -> Option<(Symbol, Option<Symbol>, Span)> {
         let stab_attrs = vec!["stable", "unstable", "rustc_const_unstable"];
 
-        // Find a stability attribute (i.e. `#[stable (..)]`, `#[unstable (..)]`,
+        // Find a stability attribute (i.e., `#[stable (..)]`, `#[unstable (..)]`,
         // `#[rustc_const_unstable (..)]`).
         if let Some(stab_attr) = stab_attrs.iter().find(|stab_attr| {
             attr.check_name(stab_attr)
@@ -128,8 +118,8 @@ impl<'a, 'tcx> LibFeatureCollector<'a, 'tcx> {
                 let msg = format!(
                     "feature `{}` is declared {}, but was previously declared {}",
                     feature,
-                    if since.is_some() { "stable"} else { "unstable" },
-                    if since.is_none() { "stable"} else { "unstable" },
+                    if since.is_some() { "stable" } else { "unstable" },
+                    if since.is_none() { "stable" } else { "unstable" },
                 );
                 self.tcx.sess.struct_span_err_with_code(span, &msg,
                     DiagnosticId::Error("E0711".into())).emit();
@@ -140,7 +130,7 @@ impl<'a, 'tcx> LibFeatureCollector<'a, 'tcx> {
 
 impl<'a, 'tcx> Visitor<'tcx> for LibFeatureCollector<'a, 'tcx> {
     fn nested_visit_map<'this>(&'this mut self) -> NestedVisitorMap<'this, 'tcx> {
-        NestedVisitorMap::All(&self.tcx.hir)
+        NestedVisitorMap::All(&self.tcx.hir())
     }
 
     fn visit_attribute(&mut self, attr: &'tcx Attribute) {
@@ -152,6 +142,6 @@ impl<'a, 'tcx> Visitor<'tcx> for LibFeatureCollector<'a, 'tcx> {
 
 pub fn collect<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>) -> LibFeatures {
     let mut collector = LibFeatureCollector::new(tcx);
-    intravisit::walk_crate(&mut collector, tcx.hir.krate());
+    intravisit::walk_crate(&mut collector, tcx.hir().krate());
     collector.lib_features
 }

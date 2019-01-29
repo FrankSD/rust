@@ -1,22 +1,9 @@
-// Copyright 2012-2016 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 //! Hook into libgraphviz for rendering dataflow graphs for MIR.
 
 use syntax::ast::NodeId;
 use rustc::mir::{BasicBlock, Mir};
-use rustc_data_structures::bitslice::bits_to_string;
-use rustc_data_structures::indexed_vec::Idx;
 
 use dot;
-use dot::IntoCow;
 
 use std::fs;
 use std::io;
@@ -28,19 +15,19 @@ use super::DataflowBuilder;
 use super::DebugFormatted;
 
 pub trait MirWithFlowState<'tcx> {
-    type BD: BitDenotation;
+    type BD: BitDenotation<'tcx>;
     fn node_id(&self) -> NodeId;
     fn mir(&self) -> &Mir<'tcx>;
-    fn flow_state(&self) -> &DataflowState<Self::BD>;
+    fn flow_state(&self) -> &DataflowState<'tcx, Self::BD>;
 }
 
 impl<'a, 'tcx, BD> MirWithFlowState<'tcx> for DataflowBuilder<'a, 'tcx, BD>
-    where BD: BitDenotation
+    where BD: BitDenotation<'tcx>
 {
     type BD = BD;
     fn node_id(&self) -> NodeId { self.node_id }
     fn mir(&self) -> &Mir<'tcx> { self.flow_state.mir() }
-    fn flow_state(&self) -> &DataflowState<Self::BD> { &self.flow_state.flow_state }
+    fn flow_state(&self) -> &DataflowState<'tcx, Self::BD> { &self.flow_state.flow_state }
 }
 
 struct Graph<'a, 'tcx, MWF:'a, P> where
@@ -56,8 +43,8 @@ pub(crate) fn print_borrowck_graph_to<'a, 'tcx, BD, P>(
     path: &Path,
     render_idx: P)
     -> io::Result<()>
-    where BD: BitDenotation,
-          P: Fn(&BD, BD::Idx) -> DebugFormatted
+    where BD: BitDenotation<'tcx>,
+          P: Fn(&BD, BD::Idx) -> DebugFormatted,
 {
     let g = Graph { mbcx, phantom: PhantomData, render_idx };
     let mut v = Vec::new();
@@ -79,7 +66,7 @@ fn outgoing(mir: &Mir, bb: BasicBlock) -> Vec<Edge> {
 
 impl<'a, 'tcx, MWF, P> dot::Labeller<'a> for Graph<'a, 'tcx, MWF, P>
     where MWF: MirWithFlowState<'tcx>,
-          P: Fn(&MWF::BD, <MWF::BD as BitDenotation>::Idx) -> DebugFormatted,
+          P: Fn(&MWF::BD, <MWF::BD as BitDenotation<'tcx>>::Idx) -> DebugFormatted,
 {
     type Node = Node;
     type Edge = Edge;
@@ -131,7 +118,7 @@ impl<'a, 'tcx, MWF, P> dot::Labeller<'a> for Graph<'a, 'tcx, MWF, P>
 
 impl<'a, 'tcx, MWF, P> Graph<'a, 'tcx, MWF, P>
 where MWF: MirWithFlowState<'tcx>,
-      P: Fn(&MWF::BD, <MWF::BD as BitDenotation>::Idx) -> DebugFormatted,
+      P: Fn(&MWF::BD, <MWF::BD as BitDenotation<'tcx>>::Idx) -> DebugFormatted,
 {
     /// Generate the node label
     fn node_label_internal<W: io::Write>(&self,
@@ -140,8 +127,8 @@ where MWF: MirWithFlowState<'tcx>,
                                          block: BasicBlock,
                                          mir: &Mir) -> io::Result<()> {
         // Header rows
-        const HDRS: [&'static str; 4] = ["ENTRY", "MIR", "BLOCK GENS", "BLOCK KILLS"];
-        const HDR_FMT: &'static str = "bgcolor=\"grey\"";
+        const HDRS: [&str; 4] = ["ENTRY", "MIR", "BLOCK GENS", "BLOCK KILLS"];
+        const HDR_FMT: &str = "bgcolor=\"grey\"";
         write!(w, "<table><tr><td rowspan=\"{}\">", HDRS.len())?;
         write!(w, "{:?}", block.index())?;
         write!(w, "</td></tr><tr>")?;
@@ -218,13 +205,12 @@ where MWF: MirWithFlowState<'tcx>,
         let i = n.index();
 
         let flow = self.mbcx.flow_state();
-        let bits_per_block = flow.sets.bits_per_block();
 
         write!(w, "<tr>")?;
 
         // Entry
         let set = flow.sets.on_entry_set_for(i);
-        write!(w, "<td>{:?}</td>", dot::escape_html(&bits_to_string(set.words(), bits_per_block)))?;
+        write!(w, "<td>{:?}</td>", dot::escape_html(&set.to_string()))?;
 
         // Terminator
         write!(w, "<td>")?;
@@ -260,20 +246,17 @@ impl<'a, 'tcx, MWF, P> dot::GraphWalk<'a> for Graph<'a, 'tcx, MWF, P>
             .basic_blocks()
             .indices()
             .collect::<Vec<_>>()
-            .into_cow()
+            .into()
     }
 
     fn edges(&self) -> dot::Edges<Edge> {
         let mir = self.mbcx.mir();
-        // base initial capacity on assumption every block has at
-        // least one outgoing edge (Which should be true for all
-        // blocks but one, the exit-block).
-        let mut edges = Vec::with_capacity(mir.basic_blocks().len());
-        for bb in mir.basic_blocks().indices() {
-            let outgoing = outgoing(mir, bb);
-            edges.extend(outgoing.into_iter());
-        }
-        edges.into_cow()
+
+        mir.basic_blocks()
+           .indices()
+           .flat_map(|bb| outgoing(mir, bb))
+           .collect::<Vec<_>>()
+           .into()
     }
 
     fn source(&self, edge: &Edge) -> Node {

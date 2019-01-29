@@ -1,14 +1,4 @@
-// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
-// Rust JSON serialization library
+// Rust JSON serialization library.
 // Copyright (c) 2011 Google Inc.
 
 #![forbid(non_camel_case_types)]
@@ -490,7 +480,7 @@ macro_rules! emit_enquoted_if_mapkey {
 impl<'a> ::Encoder for Encoder<'a> {
     type Error = EncoderError;
 
-    fn emit_nil(&mut self) -> EncodeResult {
+    fn emit_unit(&mut self) -> EncodeResult {
         if self.is_emitting_map_key { return Err(EncoderError::BadHashmapKey); }
         write!(self.writer, "null")?;
         Ok(())
@@ -648,7 +638,7 @@ impl<'a> ::Encoder for Encoder<'a> {
     }
     fn emit_option_none(&mut self) -> EncodeResult {
         if self.is_emitting_map_key { return Err(EncoderError::BadHashmapKey); }
-        self.emit_nil()
+        self.emit_unit()
     }
     fn emit_option_some<F>(&mut self, f: F) -> EncodeResult where
         F: FnOnce(&mut Encoder<'a>) -> EncodeResult,
@@ -740,7 +730,7 @@ impl<'a> PrettyEncoder<'a> {
 impl<'a> ::Encoder for PrettyEncoder<'a> {
     type Error = EncoderError;
 
-    fn emit_nil(&mut self) -> EncodeResult {
+    fn emit_unit(&mut self) -> EncodeResult {
         if self.is_emitting_map_key { return Err(EncoderError::BadHashmapKey); }
         write!(self.writer, "null")?;
         Ok(())
@@ -923,7 +913,7 @@ impl<'a> ::Encoder for PrettyEncoder<'a> {
     }
     fn emit_option_none(&mut self) -> EncodeResult {
         if self.is_emitting_map_key { return Err(EncoderError::BadHashmapKey); }
-        self.emit_nil()
+        self.emit_unit()
     }
     fn emit_option_some<F>(&mut self, f: F) -> EncodeResult where
         F: FnOnce(&mut PrettyEncoder<'a>) -> EncodeResult,
@@ -1016,7 +1006,7 @@ impl Encodable for Json {
             Json::Boolean(v) => v.encode(e),
             Json::Array(ref v) => v.encode(e),
             Json::Object(ref v) => v.encode(e),
-            Json::Null => e.emit_nil(),
+            Json::Null => e.emit_unit(),
         }
     }
 }
@@ -3493,7 +3483,7 @@ mod tests {
 
         // Helper function for counting indents
         fn indents(source: &str) -> usize {
-            let trimmed = source.trim_left_matches(' ');
+            let trimmed = source.trim_start_matches(' ');
             source.len() - trimmed.len()
         }
 

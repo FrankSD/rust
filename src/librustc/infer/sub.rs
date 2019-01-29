@@ -1,13 +1,3 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 use super::SubregionOrigin;
 use super::combine::{CombineFields, RelationDir};
 
@@ -84,8 +74,8 @@ impl<'combine, 'infcx, 'gcx, 'tcx> TypeRelation<'infcx, 'gcx, 'tcx>
                 // Shouldn't have any LBR here, so we can safely put
                 // this under a binder below without fear of accidental
                 // capture.
-                assert!(!a.has_escaping_regions());
-                assert!(!b.has_escaping_regions());
+                assert!(!a.has_escaping_bound_vars());
+                assert!(!b.has_escaping_bound_vars());
 
                 // can't make progress on `A <: B` if both A and B are
                 // type variables, so record an obligation. We also

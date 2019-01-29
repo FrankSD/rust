@@ -1,14 +1,4 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
-use hir::def_id::{DefId, CrateNum};
+use hir::def_id::{DefId, CrateNum, LOCAL_CRATE};
 use syntax::ast::NodeId;
 use syntax::symbol::{Symbol, InternedString};
 use ty::{Instance, TyCtxt};
@@ -121,7 +111,7 @@ impl<'tcx> CodegenUnit<'tcx> {
     pub fn new(name: InternedString) -> CodegenUnit<'tcx> {
         CodegenUnit {
             name: name,
-            items: FxHashMap(),
+            items: Default::default(),
             size_estimate: None,
         }
     }
@@ -251,7 +241,7 @@ impl<'a, 'gcx: 'tcx, 'tcx: 'a> CodegenUnitNameBuilder<'a, 'gcx, 'tcx> {
     pub fn new(tcx: TyCtxt<'a, 'gcx, 'tcx>) -> Self {
         CodegenUnitNameBuilder {
             tcx,
-            cache: FxHashMap(),
+            cache: Default::default(),
         }
     }
 
@@ -266,12 +256,13 @@ impl<'a, 'gcx: 'tcx, 'tcx: 'a> CodegenUnitNameBuilder<'a, 'gcx, 'tcx> {
     /// This function will build CGU names of the form:
     ///
     /// ```
-    /// <crate-name>.<crate-disambiguator>(-<component>)*[.<special-suffix>]
+    /// <crate-name>.<crate-disambiguator>[-in-<local-crate-id>](-<component>)*[.<special-suffix>]
+    /// <local-crate-id> = <local-crate-name>.<local-crate-disambiguator>
     /// ```
     ///
     /// The '.' before `<special-suffix>` makes sure that names with a special
     /// suffix can never collide with a name built out of regular Rust
-    /// identifiers (e.g. module paths).
+    /// identifiers (e.g., module paths).
     pub fn build_cgu_name<I, C, S>(&mut self,
                                    cnum: CrateNum,
                                    components: I,
@@ -311,9 +302,25 @@ impl<'a, 'gcx: 'tcx, 'tcx: 'a> CodegenUnitNameBuilder<'a, 'gcx, 'tcx> {
         // Start out with the crate name and disambiguator
         let tcx = self.tcx;
         let crate_prefix = self.cache.entry(cnum).or_insert_with(|| {
-            let crate_disambiguator = format!("{}", tcx.crate_disambiguator(cnum));
+            // Whenever the cnum is not LOCAL_CRATE we also mix in the
+            // local crate's ID. Otherwise there can be collisions between CGUs
+            // instantiating stuff for upstream crates.
+            let local_crate_id = if cnum != LOCAL_CRATE {
+                let local_crate_disambiguator =
+                    format!("{}", tcx.crate_disambiguator(LOCAL_CRATE));
+                format!("-in-{}.{}",
+                        tcx.crate_name(LOCAL_CRATE),
+                        &local_crate_disambiguator[0 .. 8])
+            } else {
+                String::new()
+            };
+
+            let crate_disambiguator = tcx.crate_disambiguator(cnum).to_string();
             // Using a shortened disambiguator of about 40 bits
-            format!("{}.{}", tcx.crate_name(cnum), &crate_disambiguator[0 .. 8])
+            format!("{}.{}{}",
+                tcx.crate_name(cnum),
+                &crate_disambiguator[0 .. 8],
+                local_crate_id)
         });
 
         write!(cgu_name, "{}", crate_prefix).unwrap();

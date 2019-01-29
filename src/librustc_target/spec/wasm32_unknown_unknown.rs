@@ -1,13 +1,3 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 // The wasm32-unknown-unknown target is currently an experimental version of a
 // wasm-based target which does *not* use the Emscripten toolchain. Instead
 // this toolchain is based purely on LLVM's own toolchain, using LLVM's native
@@ -36,8 +26,7 @@ pub fn target() -> Result<Target, String> {
         dll_suffix: ".wasm".to_string(),
         linker_is_gnu: false,
 
-        // A bit of a lie, but "eh"
-        max_atomic_width: Some(32),
+        max_atomic_width: Some(64),
 
         // Unwinding doesn't work right now, so the whole target unconditionally
         // defaults to panic=abort. Note that this is guaranteed to change in
@@ -54,6 +43,12 @@ pub fn target() -> Result<Target, String> {
         // we use the LLD shipped with the Rust toolchain by default
         linker: Some("rust-lld".to_owned()),
         lld_flavor: LldFlavor::Wasm,
+
+        // No need for indirection here, simd types can always be passed by
+        // value as the whole module either has simd or not, which is different
+        // from x86 (for example) where programs can have functions that don't
+        // enable simd features.
+        simd_types_indirect: false,
 
         .. Default::default()
     };

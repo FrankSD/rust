@@ -1,13 +1,3 @@
-// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 // The crate store - a central repo for information collected about external
 // crates and libraries
 
@@ -53,7 +43,12 @@ pub struct ImportedSourceFile {
 }
 
 pub struct CrateMetadata {
+    /// Original name of the crate.
     pub name: Symbol,
+
+    /// Name of the crate as imported.  I.e., if imported with
+    /// `extern crate foo as bar;` this will be `bar`.
+    pub imported_name: Symbol,
 
     /// Information about the extern crate that caused this crate to
     /// be loaded. If this is `None`, then the crate was injected
@@ -106,7 +101,7 @@ impl CStore {
             // corresponding `CrateNum`. This first entry will always remain
             // `None`.
             metas: RwLock::new(IndexVec::from_elem_n(None, 1)),
-            extern_mod_crate_map: Lock::new(FxHashMap()),
+            extern_mod_crate_map: Default::default(),
             metadata_loader,
         }
     }

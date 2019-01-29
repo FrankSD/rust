@@ -1,19 +1,10 @@
-// Copyright 2012-2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 #![allow(non_snake_case)]
 
-use rustc::hir::map as hir_map;
+use rustc::hir::Node;
 use rustc::ty::subst::Substs;
 use rustc::ty::{self, AdtKind, ParamEnv, Ty, TyCtxt};
-use rustc::ty::layout::{self, IntegerExt, LayoutOf};
+use rustc::ty::layout::{self, IntegerExt, LayoutOf, VariantIdx};
+use rustc_data_structures::indexed_vec::Idx;
 use util::nodemap::FxHashSet;
 use lint::{LateContext, LintContext, LintArray};
 use lint::{LintPass, LateLintPass};
@@ -24,10 +15,13 @@ use std::{i8, i16, i32, i64, u8, u16, u32, u64, f32, f64};
 use syntax::{ast, attr};
 use syntax::errors::Applicability;
 use rustc_target::spec::abi::Abi;
+use syntax::edition::Edition;
 use syntax_pos::Span;
 use syntax::source_map;
 
 use rustc::hir;
+
+use rustc::mir::interpret::{sign_extend, truncate};
 
 declare_lint! {
     UNUSED_COMPARISONS,
@@ -38,7 +32,8 @@ declare_lint! {
 declare_lint! {
     OVERFLOWING_LITERALS,
     Warn,
-    "literal out of range for its type"
+    "literal out of range for its type",
+    Edition::Edition2018 => Deny
 }
 
 declare_lint! {
@@ -60,6 +55,10 @@ impl TypeLimits {
 }
 
 impl LintPass for TypeLimits {
+    fn name(&self) -> &'static str {
+        "TypeLimits"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(UNUSED_COMPARISONS,
                     OVERFLOWING_LITERALS)
@@ -136,15 +135,15 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for TypeLimits {
                             _ => bug!(),
                         };
                         if lit_val < min || lit_val > max {
-                            let parent_id = cx.tcx.hir.get_parent_node(e.id);
-                            if let hir_map::NodeExpr(parent_expr) = cx.tcx.hir.get(parent_id) {
+                            let parent_id = cx.tcx.hir().get_parent_node(e.id);
+                            if let Node::Expr(parent_expr) = cx.tcx.hir().get(parent_id) {
                                 if let hir::ExprKind::Cast(..) = parent_expr.node {
                                     if let ty::Char = cx.tables.expr_ty(parent_expr).sty {
                                         let mut err = cx.struct_span_lint(
                                                              OVERFLOWING_LITERALS,
                                                              parent_expr.span,
                                                              "only u8 can be cast into char");
-                                        err.span_suggestion_with_applicability(
+                                        err.span_suggestion(
                                             parent_expr.span,
                                             &"use a char literal instead",
                                             format!("'\\u{{{:X}}}'", lit_val),
@@ -375,14 +374,14 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for TypeLimits {
             let (t, actually) = match ty {
                 ty::Int(t) => {
                     let ity = attr::IntType::SignedInt(t);
-                    let bits = layout::Integer::from_attr(cx.tcx, ity).size().bits();
-                    let actually = (val << (128 - bits)) as i128 >> (128 - bits);
+                    let size = layout::Integer::from_attr(&cx.tcx, ity).size();
+                    let actually = sign_extend(val, size) as i128;
                     (format!("{:?}", t), actually.to_string())
                 }
                 ty::Uint(t) => {
                     let ity = attr::IntType::UnsignedInt(t);
-                    let bits = layout::Integer::from_attr(cx.tcx, ity).size().bits();
-                    let actually = (val << (128 - bits)) >> (128 - bits);
+                    let size = layout::Integer::from_attr(&cx.tcx, ity).size();
+                    let actually = truncate(val, size);
                     (format!("{:?}", t), actually.to_string())
                 }
                 _ => bug!(),
@@ -402,7 +401,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for TypeLimits {
             {
                 if let Some(pos) = repr_str.chars().position(|c| c == 'i' || c == 'u') {
                     let (sans_suffix, _) = repr_str.split_at(pos);
-                    err.span_suggestion_with_applicability(
+                    err.span_suggestion(
                         expr.span,
                         &format!("consider using `{}` instead", sugg_ty),
                         format!("{}{}", sans_suffix, sugg_ty),
@@ -450,10 +449,13 @@ fn is_repr_nullable_ptr<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     if def.variants.len() == 2 {
         let data_idx;
 
-        if def.variants[0].fields.is_empty() {
-            data_idx = 1;
-        } else if def.variants[1].fields.is_empty() {
-            data_idx = 0;
+        let zero = VariantIdx::new(0);
+        let one = VariantIdx::new(1);
+
+        if def.variants[zero].fields.is_empty() {
+            data_idx = one;
+        } else if def.variants[one].fields.is_empty() {
+            data_idx = zero;
         } else {
             return false;
         }
@@ -691,7 +693,7 @@ impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
                 }
 
                 let sig = cx.erase_late_bound_regions(&sig);
-                if !sig.output().is_nil() {
+                if !sig.output().is_unit() {
                     let r = self.check_type_for_ffi(cache, sig.output());
                     match r {
                         FfiSafe => {}
@@ -716,12 +718,15 @@ impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
 
             ty::Param(..) |
             ty::Infer(..) |
+            ty::Bound(..) |
             ty::Error |
             ty::Closure(..) |
             ty::Generator(..) |
             ty::GeneratorWitness(..) |
+            ty::Placeholder(..) |
+            ty::UnnormalizedProjection(..) |
             ty::Projection(..) |
-            ty::Anon(..) |
+            ty::Opaque(..) |
             ty::FnDef(..) => bug!("Unexpected type in foreign function"),
         }
     }
@@ -731,7 +736,7 @@ impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
         // any generic types right now:
         let ty = self.cx.tcx.normalize_erasing_regions(ParamEnv::reveal_all(), ty);
 
-        match self.check_type_for_ffi(&mut FxHashSet(), ty) {
+        match self.check_type_for_ffi(&mut FxHashSet::default(), ty) {
             FfiResult::FfiSafe => {}
             FfiResult::FfiPhantom(ty) => {
                 self.cx.span_lint(IMPROPER_CTYPES,
@@ -747,7 +752,7 @@ impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
                     diag.help(s);
                 }
                 if let ty::Adt(def, _) = unsafe_ty.sty {
-                    if let Some(sp) = self.cx.tcx.hir.span_if_local(def.did) {
+                    if let Some(sp) = self.cx.tcx.hir().span_if_local(def.did) {
                         diag.span_note(sp, "type defined here");
                     }
                 }
@@ -757,7 +762,7 @@ impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
     }
 
     fn check_foreign_fn(&mut self, id: ast::NodeId, decl: &hir::FnDecl) {
-        let def_id = self.cx.tcx.hir.local_def_id(id);
+        let def_id = self.cx.tcx.hir().local_def_id(id);
         let sig = self.cx.tcx.fn_sig(def_id);
         let sig = self.cx.tcx.erase_late_bound_regions(&sig);
 
@@ -767,14 +772,14 @@ impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
 
         if let hir::Return(ref ret_hir) = decl.output {
             let ret_ty = sig.output();
-            if !ret_ty.is_nil() {
+            if !ret_ty.is_unit() {
                 self.check_type_for_ffi_and_report_errors(ret_hir.span, ret_ty);
             }
         }
     }
 
     fn check_foreign_static(&mut self, id: ast::NodeId, span: Span) {
-        let def_id = self.cx.tcx.hir.local_def_id(id);
+        let def_id = self.cx.tcx.hir().local_def_id(id);
         let ty = self.cx.tcx.type_of(def_id);
         self.check_type_for_ffi_and_report_errors(span, ty);
     }
@@ -784,6 +789,10 @@ impl<'a, 'tcx> ImproperCTypesVisitor<'a, 'tcx> {
 pub struct ImproperCTypes;
 
 impl LintPass for ImproperCTypes {
+    fn name(&self) -> &'static str {
+        "ImproperCTypes"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(IMPROPER_CTYPES)
     }
@@ -791,8 +800,8 @@ impl LintPass for ImproperCTypes {
 
 impl<'a, 'tcx> LateLintPass<'a, 'tcx> for ImproperCTypes {
     fn check_foreign_item(&mut self, cx: &LateContext, it: &hir::ForeignItem) {
-        let mut vis = ImproperCTypesVisitor { cx: cx };
-        let abi = cx.tcx.hir.get_foreign_abi(it.id);
+        let mut vis = ImproperCTypesVisitor { cx };
+        let abi = cx.tcx.hir().get_foreign_abi(it.id);
         if abi != Abi::RustIntrinsic && abi != Abi::PlatformIntrinsic {
             match it.node {
                 hir::ForeignItemKind::Fn(ref decl, _, _) => {
@@ -810,6 +819,10 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for ImproperCTypes {
 pub struct VariantSizeDifferences;
 
 impl LintPass for VariantSizeDifferences {
+    fn name(&self) -> &'static str {
+        "VariantSizeDifferences"
+    }
+
     fn get_lints(&self) -> LintArray {
         lint_array!(VARIANT_SIZE_DIFFERENCES)
     }
@@ -818,14 +831,14 @@ impl LintPass for VariantSizeDifferences {
 impl<'a, 'tcx> LateLintPass<'a, 'tcx> for VariantSizeDifferences {
     fn check_item(&mut self, cx: &LateContext, it: &hir::Item) {
         if let hir::ItemKind::Enum(ref enum_definition, _) = it.node {
-            let item_def_id = cx.tcx.hir.local_def_id(it.id);
+            let item_def_id = cx.tcx.hir().local_def_id(it.id);
             let t = cx.tcx.type_of(item_def_id);
             let ty = cx.tcx.erase_regions(&t);
             match cx.layout_of(ty) {
                 Ok(layout) => {
                     let variants = &layout.variants;
                     if let layout::Variants::Tagged { ref variants, ref tag, .. } = variants {
-                        let discr_size = tag.value.size(cx.tcx).bytes();
+                        let discr_size = tag.value.size(&cx.tcx).bytes();
 
                         debug!("enum `{}` is {} bytes large with layout:\n{:#?}",
                                t, layout.size.bytes(), layout);
@@ -838,7 +851,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for VariantSizeDifferences {
                                 let bytes = variant_layout.size.bytes().saturating_sub(discr_size);
 
                                 debug!("- variant `{}` is {} bytes large",
-                                       variant.node.name,
+                                       variant.node.ident,
                                        bytes);
                                 bytes
                             })

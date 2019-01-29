@@ -1,15 +1,4 @@
-// Copyright 2012-2013 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 use hir::def_id::DefId;
-use mir::interpret::ConstValue;
 use infer::InferCtxt;
 use ty::subst::Substs;
 use traits;
@@ -158,7 +147,7 @@ impl<'a, 'gcx, 'tcx> WfPredicates<'a, 'gcx, 'tcx> {
         let infcx = &mut self.infcx;
         let param_env = self.param_env;
         self.out.iter()
-                .inspect(|pred| assert!(!pred.has_escaping_regions()))
+                .inspect(|pred| assert!(!pred.has_escaping_bound_vars()))
                 .flat_map(|pred| {
                     let mut selcx = traits::SelectionContext::new(infcx);
                     let pred = traits::normalize(&mut selcx, param_env, cause.clone(), pred);
@@ -190,7 +179,7 @@ impl<'a, 'gcx, 'tcx> WfPredicates<'a, 'gcx, 'tcx> {
 
         self.out.extend(
             trait_ref.substs.types()
-                            .filter(|ty| !ty.has_escaping_regions())
+                            .filter(|ty| !ty.has_escaping_bound_vars())
                             .map(|ty| traits::Obligation::new(cause.clone(),
                                                               param_env,
                                                               ty::Predicate::WellFormed(ty))));
@@ -205,31 +194,30 @@ impl<'a, 'gcx, 'tcx> WfPredicates<'a, 'gcx, 'tcx> {
         let trait_ref = data.trait_ref(self.infcx.tcx);
         self.compute_trait_ref(&trait_ref, Elaborate::None);
 
-        if !data.has_escaping_regions() {
+        if !data.has_escaping_bound_vars() {
             let predicate = trait_ref.to_predicate();
             let cause = self.cause(traits::ProjectionWf(data));
             self.out.push(traits::Obligation::new(cause, self.param_env, predicate));
         }
     }
 
-    /// Pushes the obligations required for a constant value to be WF
+    /// Pushes the obligations required for an array length to be WF
     /// into `self.out`.
-    fn compute_const(&mut self, constant: &'tcx ty::Const<'tcx>) {
-        self.require_sized(constant.ty, traits::ConstSized);
-        if let ConstValue::Unevaluated(def_id, substs) = constant.val {
+    fn compute_array_len(&mut self, constant: ty::LazyConst<'tcx>) {
+        if let ty::LazyConst::Unevaluated(def_id, substs) = constant {
             let obligations = self.nominal_obligations(def_id, substs);
             self.out.extend(obligations);
 
             let predicate = ty::Predicate::ConstEvaluatable(def_id, substs);
             let cause = self.cause(traits::MiscObligation);
             self.out.push(traits::Obligation::new(cause,
-                                                    self.param_env,
-                                                    predicate));
+                                                  self.param_env,
+                                                  predicate));
         }
     }
 
     fn require_sized(&mut self, subty: Ty<'tcx>, cause: traits::ObligationCauseCode<'tcx>) {
-        if !subty.has_escaping_regions() {
+        if !subty.has_escaping_bound_vars() {
             let cause = self.cause(cause);
             let trait_ref = ty::TraitRef {
                 def_id: self.infcx.tcx.require_lang_item(lang_items::SizedTraitLangItem),
@@ -258,6 +246,8 @@ impl<'a, 'gcx, 'tcx> WfPredicates<'a, 'gcx, 'tcx> {
                 ty::GeneratorWitness(..) |
                 ty::Never |
                 ty::Param(_) |
+                ty::Bound(..) |
+                ty::Placeholder(..) |
                 ty::Foreign(..) => {
                     // WfScalar, WfParameter, etc
                 }
@@ -268,8 +258,7 @@ impl<'a, 'gcx, 'tcx> WfPredicates<'a, 'gcx, 'tcx> {
 
                 ty::Array(subty, len) => {
                     self.require_sized(subty, traits::SliceOrArrayElem);
-                    assert_eq!(len.ty, self.infcx.tcx.types.usize);
-                    self.compute_const(len);
+                    self.compute_array_len(*len);
                 }
 
                 ty::Tuple(ref tys) => {
@@ -289,15 +278,22 @@ impl<'a, 'gcx, 'tcx> WfPredicates<'a, 'gcx, 'tcx> {
                     self.compute_projection(data);
                 }
 
+                ty::UnnormalizedProjection(..) => bug!("only used with chalk-engine"),
+
                 ty::Adt(def, substs) => {
                     // WfNominalType
                     let obligations = self.nominal_obligations(def.did, substs);
                     self.out.extend(obligations);
                 }
 
+                ty::FnDef(did, substs) => {
+                    let obligations = self.nominal_obligations(did, substs);
+                    self.out.extend(obligations);
+                }
+
                 ty::Ref(r, rty, _) => {
                     // WfReference
-                    if !r.has_escaping_regions() && !rty.has_escaping_regions() {
+                    if !r.has_escaping_bound_vars() && !rty.has_escaping_bound_vars() {
                         let cause = self.cause(traits::ReferenceOutlivesReferent(ty));
                         self.out.push(
                             traits::Obligation::new(
@@ -355,12 +351,12 @@ impl<'a, 'gcx, 'tcx> WfPredicates<'a, 'gcx, 'tcx> {
                     }
                 }
 
-                ty::FnDef(..) | ty::FnPtr(_) => {
+                ty::FnPtr(_) => {
                     // let the loop iterate into the argument/return
                     // types appearing in the fn signature
                 }
 
-                ty::Anon(did, substs) => {
+                ty::Opaque(did, substs) => {
                     // all of the requirements on type parameters
                     // should've been checked by the instantiation
                     // of whatever returned this exact `impl Trait`.
@@ -385,7 +381,7 @@ impl<'a, 'gcx, 'tcx> WfPredicates<'a, 'gcx, 'tcx> {
 
                     let cause = self.cause(traits::MiscObligation);
                     let component_traits =
-                        data.auto_traits().chain(data.principal().map(|p| p.def_id()));
+                        data.auto_traits().chain(data.principal_def_id());
                     self.out.extend(
                         component_traits.map(|did| traits::Obligation::new(
                             cause.clone(),
@@ -448,7 +444,7 @@ impl<'a, 'gcx, 'tcx> WfPredicates<'a, 'gcx, 'tcx> {
                   .map(|pred| traits::Obligation::new(cause.clone(),
                                                       self.param_env,
                                                       pred))
-                  .filter(|pred| !pred.has_escaping_regions())
+                  .filter(|pred| !pred.has_escaping_bound_vars())
                   .collect()
     }
 
@@ -487,12 +483,13 @@ impl<'a, 'gcx, 'tcx> WfPredicates<'a, 'gcx, 'tcx> {
         // Note: in fact we only permit builtin traits, not `Bar<'d>`, I
         // am looking forward to the future here.
 
-        if !data.has_escaping_regions() {
+        if !data.has_escaping_bound_vars() {
             let implicit_bounds =
                 object_region_bounds(self.infcx.tcx, data);
 
             let explicit_bound = region;
 
+            self.out.reserve(implicit_bounds.len());
             for implicit_bound in implicit_bounds {
                 let cause = self.cause(traits::ObjectTypeBound(ty, explicit_bound));
                 let outlives = ty::Binder::dummy(
@@ -518,7 +515,7 @@ pub fn object_region_bounds<'a, 'gcx, 'tcx>(
 {
     // Since we don't actually *know* the self type for an object,
     // this "open(err)" serves as a kind of dummy standin -- basically
-    // a skolemized type.
+    // a placeholder type.
     let open_ty = tcx.mk_infer(ty::FreshTy(0));
 
     let predicates = existential_predicates.iter().filter_map(|predicate| {

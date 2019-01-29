@@ -1,13 +1,3 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 use fmt_macros::{Parser, Piece, Position};
 
 use hir::def_id::DefId;
@@ -44,7 +34,7 @@ impl OnUnimplementedNote {
     }
 }
 
-fn parse_error(tcx: TyCtxt, span: Span,
+fn parse_error(tcx: TyCtxt<'_, '_, '_>, span: Span,
                message: &str,
                label: &str,
                note: Option<&str>)
@@ -74,17 +64,17 @@ impl<'a, 'gcx, 'tcx> OnUnimplementedDirective {
         let condition = if is_root {
             None
         } else {
-            let cond = item_iter.next().ok_or_else(|| {
+            let cond = item_iter.next().ok_or_else(||
                 parse_error(tcx, span,
                             "empty `on`-clause in `#[rustc_on_unimplemented]`",
                             "empty on-clause here",
                             None)
-            })?.meta_item().ok_or_else(|| {
+            )?.meta_item().ok_or_else(||
                 parse_error(tcx, span,
                             "invalid `on`-clause in `#[rustc_on_unimplemented]`",
                             "invalid on-clause here",
                             None)
-            })?;
+            )?;
             attr::eval_condition(cond, &tcx.sess.parse_sess, &mut |_| true);
             Some(cond.clone())
         };
@@ -167,10 +157,7 @@ impl<'a, 'gcx, 'tcx> OnUnimplementedDirective {
                 note: None,
             }))
         } else {
-            return Err(parse_error(tcx, attr.span,
-                                   "`#[rustc_on_unimplemented]` requires a value",
-                                   "value required here",
-                                   Some(r#"eg `#[rustc_on_unimplemented(message="foo")]`"#)));
+            return Err(ErrorReported);
         };
         debug!("of_item({:?}/{:?}) = {:?}", trait_def_id, impl_def_id, result);
         result
@@ -244,7 +231,7 @@ impl<'a, 'gcx, 'tcx> OnUnimplementedFormatString {
     {
         let name = tcx.item_name(trait_def_id);
         let generics = tcx.generics_of(trait_def_id);
-        let parser = Parser::new(&self.0, None);
+        let parser = Parser::new(&self.0, None, vec![], false);
         let mut result = Ok(());
         for token in parser {
             match token {
@@ -259,9 +246,9 @@ impl<'a, 'gcx, 'tcx> OnUnimplementedFormatString {
                     // `{from_desugaring}` is allowed
                     Position::ArgumentNamed(s) if s == "from_desugaring" => (),
                     // So is `{A}` if A is a type parameter
-                    Position::ArgumentNamed(s) => match generics.params.iter().find(|param| {
+                    Position::ArgumentNamed(s) => match generics.params.iter().find(|param|
                         param.name == s
-                    }) {
+                    ) {
                         Some(_) => (),
                         None => {
                             span_err!(tcx.sess, span, E0230,
@@ -303,8 +290,8 @@ impl<'a, 'gcx, 'tcx> OnUnimplementedFormatString {
         }).collect::<FxHashMap<String, String>>();
         let empty_string = String::new();
 
-        let parser = Parser::new(&self.0, None);
-        parser.map(|p| {
+        let parser = Parser::new(&self.0, None, vec![], false);
+        parser.map(|p|
             match p {
                 Piece::String(s) => s,
                 Piece::NextArgument(a) => match a.position {
@@ -326,11 +313,9 @@ impl<'a, 'gcx, 'tcx> OnUnimplementedFormatString {
                             }
                         }
                     },
-                    _ => {
-                        bug!("broken on_unimplemented {:?} - bad format arg", self.0)
-                    }
+                    _ => bug!("broken on_unimplemented {:?} - bad format arg", self.0)
                 }
             }
-        }).collect()
+        ).collect()
     }
 }

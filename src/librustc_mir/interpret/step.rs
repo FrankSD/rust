@@ -1,24 +1,14 @@
-// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 //! This module contains the `EvalContext` methods for executing a single step of the interpreter.
 //!
 //! The main entry point is the `step` method.
 
 use rustc::mir;
 use rustc::ty::layout::LayoutOf;
-use rustc::mir::interpret::{EvalResult, Scalar};
+use rustc::mir::interpret::{EvalResult, Scalar, PointerArithmetic};
 
 use super::{EvalContext, Machine};
 
-/// Classify whether an operator is "left-homogeneous", i.e. the LHS has the
+/// Classify whether an operator is "left-homogeneous", i.e., the LHS has the
 /// same type as the result.
 #[inline]
 fn binop_left_homogeneous(op: mir::BinOp) -> bool {
@@ -31,7 +21,7 @@ fn binop_left_homogeneous(op: mir::BinOp) -> bool {
             false,
     }
 }
-/// Classify whether an operator is "right-homogeneous", i.e. the RHS has the
+/// Classify whether an operator is "right-homogeneous", i.e., the RHS has the
 /// same type as the LHS.
 #[inline]
 fn binop_right_homogeneous(op: mir::BinOp) -> bool {
@@ -45,38 +35,15 @@ fn binop_right_homogeneous(op: mir::BinOp) -> bool {
     }
 }
 
-impl<'a, 'mir, 'tcx, M: Machine<'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> {
-    pub fn inc_step_counter_and_detect_loops(&mut self) -> EvalResult<'tcx, ()> {
-        /// The number of steps between loop detector snapshots.
-        /// Should be a power of two for performance reasons.
-        const DETECTOR_SNAPSHOT_PERIOD: isize = 256;
-
-        {
-            let steps = &mut self.steps_since_detector_enabled;
-
-            *steps += 1;
-            if *steps < 0 {
-                return Ok(());
-            }
-
-            *steps %= DETECTOR_SNAPSHOT_PERIOD;
-            if *steps != 0 {
-                return Ok(());
-            }
-        }
-
-        if self.loop_detector.is_empty() {
-            // First run of the loop detector
-
-            // FIXME(#49980): make this warning a lint
-            self.tcx.sess.span_warn(self.frame().span,
-                "Constant evaluating a complex constant, this might take some time");
-        }
-
-        self.loop_detector.observe_and_analyze(&self.machine, &self.stack, &self.memory)
+impl<'a, 'mir, 'tcx, M: Machine<'a, 'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> {
+    pub fn run(&mut self) -> EvalResult<'tcx> {
+        while self.step()? {}
+        Ok(())
     }
 
     /// Returns true as long as there are more things to do.
+    ///
+    /// This is used by [priroda](https://github.com/oli-obk/priroda)
     pub fn step(&mut self) -> EvalResult<'tcx, bool> {
         if self.stack.is_empty() {
             return Ok(false);
@@ -95,7 +62,7 @@ impl<'a, 'mir, 'tcx, M: Machine<'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> {
             return Ok(true);
         }
 
-        self.inc_step_counter_and_detect_loops()?;
+        M::before_terminator(self)?;
 
         let terminator = basic_block.terminator();
         assert_eq!(old_frames, self.cur_frame());
@@ -104,11 +71,11 @@ impl<'a, 'mir, 'tcx, M: Machine<'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> {
     }
 
     fn statement(&mut self, stmt: &mir::Statement<'tcx>) -> EvalResult<'tcx> {
-        debug!("{:?}", stmt);
+        info!("{:?}", stmt);
 
         use rustc::mir::StatementKind::*;
 
-        // Some statements (e.g. box) push new stack frames.
+        // Some statements (e.g., box) push new stack frames.
         // We have to record the stack frame number *before* executing the statement.
         let frame_idx = self.cur_frame();
         self.tcx.span = stmt.source_info.span;
@@ -122,7 +89,7 @@ impl<'a, 'mir, 'tcx, M: Machine<'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> {
                 variant_index,
             } => {
                 let dest = self.eval_place(place)?;
-                self.write_discriminant_value(variant_index, dest)?;
+                self.write_discriminant_index(variant_index, dest)?;
             }
 
             // Mark locals as alive
@@ -137,21 +104,18 @@ impl<'a, 'mir, 'tcx, M: Machine<'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> {
                 self.deallocate_local(old_val)?;
             }
 
-            // No dynamic semantics attached to `ReadForMatch`; MIR
+            // No dynamic semantics attached to `FakeRead`; MIR
             // interpreter is solely intended for borrowck'ed code.
-            ReadForMatch(..) => {}
+            FakeRead(..) => {}
 
-            // Validity checks.
-            Validate(op, ref places) => {
-                for operand in places {
-                    M::validation_op(self, op, operand)?;
-                }
-            }
-            EndRegion(ce) => {
-                M::end_region(self, Some(ce))?;
+            // Stacked Borrows.
+            Retag(kind, ref place) => {
+                let dest = self.eval_place(place)?;
+                M::retag(self, kind, dest)?;
             }
 
-            UserAssertTy(..) => {}
+            // Statements we do not track.
+            AscribeUserType(..) => {}
 
             // Defined to do nothing. These are added by optimization passes, to avoid changing the
             // size of MIR constantly.
@@ -185,9 +149,9 @@ impl<'a, 'mir, 'tcx, M: Machine<'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> {
 
             BinaryOp(bin_op, ref left, ref right) => {
                 let layout = if binop_left_homogeneous(bin_op) { Some(dest.layout) } else { None };
-                let left = self.eval_operand_and_read_value(left, layout)?;
+                let left = self.read_immediate(self.eval_operand(left, layout)?)?;
                 let layout = if binop_right_homogeneous(bin_op) { Some(left.layout) } else { None };
-                let right = self.eval_operand_and_read_value(right, layout)?;
+                let right = self.read_immediate(self.eval_operand(right, layout)?)?;
                 self.binop_ignore_overflow(
                     bin_op,
                     left,
@@ -198,9 +162,9 @@ impl<'a, 'mir, 'tcx, M: Machine<'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> {
 
             CheckedBinaryOp(bin_op, ref left, ref right) => {
                 // Due to the extra boolean in the result, we can never reuse the `dest.layout`.
-                let left = self.eval_operand_and_read_value(left, None)?;
+                let left = self.read_immediate(self.eval_operand(left, None)?)?;
                 let layout = if binop_right_homogeneous(bin_op) { Some(left.layout) } else { None };
-                let right = self.eval_operand_and_read_value(right, layout)?;
+                let right = self.read_immediate(self.eval_operand(right, layout)?)?;
                 self.binop_with_overflow(
                     bin_op,
                     left,
@@ -211,7 +175,7 @@ impl<'a, 'mir, 'tcx, M: Machine<'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> {
 
             UnaryOp(un_op, ref operand) => {
                 // The operand always has the same type as the result.
-                let val = self.eval_operand_and_read_value(operand, Some(dest.layout))?;
+                let val = self.read_immediate(self.eval_operand(operand, Some(dest.layout))?)?;
                 let val = self.unary_op(un_op, val.to_scalar()?, dest.layout)?;
                 self.write_scalar(val, dest)?;
             }
@@ -219,7 +183,7 @@ impl<'a, 'mir, 'tcx, M: Machine<'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> {
             Aggregate(ref kind, ref operands) => {
                 let (dest, active_field_index) = match **kind {
                     mir::AggregateKind::Adt(adt_def, variant_index, _, _, active_field_index) => {
-                        self.write_discriminant_value(variant_index, dest)?;
+                        self.write_discriminant_index(variant_index, dest)?;
                         if adt_def.is_enum() {
                             (self.place_downcast(dest, variant_index)?, active_field_index)
                         } else {
@@ -243,7 +207,7 @@ impl<'a, 'mir, 'tcx, M: Machine<'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> {
             Repeat(ref operand, _) => {
                 let op = self.eval_operand(operand, None)?;
                 let dest = self.force_allocation(dest)?;
-                let length = dest.len();
+                let length = dest.len(self)?;
 
                 if length > 0 {
                     // write the first
@@ -253,7 +217,7 @@ impl<'a, 'mir, 'tcx, M: Machine<'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> {
                     if length > 1 {
                         // copy the rest
                         let (dest, dest_align) = first.to_scalar_ptr_align();
-                        let rest = dest.ptr_offset(first.layout.size, &self)?;
+                        let rest = dest.ptr_offset(first.layout.size, self)?;
                         self.memory.copy_repeatedly(
                             dest, dest_align, rest, dest_align, first.layout.size, length - 1, true
                         )?;
@@ -265,21 +229,18 @@ impl<'a, 'mir, 'tcx, M: Machine<'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> {
                 // FIXME(CTFE): don't allow computing the length of arrays in const eval
                 let src = self.eval_place(place)?;
                 let mplace = self.force_allocation(src)?;
-                let len = mplace.len();
-                let size = self.memory.pointer_size().bytes() as u8;
+                let len = mplace.len(self)?;
+                let size = self.pointer_size();
                 self.write_scalar(
-                    Scalar::Bits {
-                        bits: len as u128,
-                        size,
-                    },
+                    Scalar::from_uint(len, size),
                     dest,
                 )?;
             }
 
             Ref(_, _, ref place) => {
                 let src = self.eval_place(place)?;
-                let val = self.force_allocation(src)?.to_ref(&self);
-                self.write_value(val, dest)?;
+                let val = self.force_allocation(src)?;
+                self.write_immediate(val.to_ref(), dest)?;
             }
 
             NullaryOp(mir::NullOp::Box, _) => {
@@ -287,34 +248,28 @@ impl<'a, 'mir, 'tcx, M: Machine<'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> {
             }
 
             NullaryOp(mir::NullOp::SizeOf, ty) => {
-                let ty = self.monomorphize(ty, self.substs());
+                let ty = self.monomorphize(ty)?;
                 let layout = self.layout_of(ty)?;
                 assert!(!layout.is_unsized(),
                         "SizeOf nullary MIR operator called for unsized type");
-                let size = self.memory.pointer_size().bytes() as u8;
+                let size = self.pointer_size();
                 self.write_scalar(
-                    Scalar::Bits {
-                        bits: layout.size.bytes() as u128,
-                        size,
-                    },
+                    Scalar::from_uint(layout.size.bytes(), size),
                     dest,
                 )?;
             }
 
             Cast(kind, ref operand, cast_ty) => {
-                debug_assert_eq!(self.monomorphize(cast_ty, self.substs()), dest.layout.ty);
+                debug_assert_eq!(self.monomorphize(cast_ty)?, dest.layout.ty);
                 let src = self.eval_operand(operand, None)?;
                 self.cast(src, kind, dest)?;
             }
 
             Discriminant(ref place) => {
                 let place = self.eval_place(place)?;
-                let discr_val = self.read_discriminant_value(self.place_to_op(place)?)?;
-                let size = dest.layout.size.bytes() as u8;
-                self.write_scalar(Scalar::Bits {
-                    bits: discr_val,
-                    size,
-                }, dest)?;
+                let discr_val = self.read_discriminant(self.place_to_op(place)?)?.0;
+                let size = dest.layout.size;
+                self.write_scalar(Scalar::from_uint(discr_val, size), dest)?;
             }
         }
 
@@ -324,12 +279,17 @@ impl<'a, 'mir, 'tcx, M: Machine<'mir, 'tcx>> EvalContext<'a, 'mir, 'tcx, M> {
     }
 
     fn terminator(&mut self, terminator: &mir::Terminator<'tcx>) -> EvalResult<'tcx> {
-        debug!("{:?}", terminator.kind);
+        info!("{:?}", terminator.kind);
         self.tcx.span = terminator.source_info.span;
         self.memory.tcx.span = terminator.source_info.span;
+
+        let old_stack = self.cur_frame();
+        let old_bb = self.frame().block;
         self.eval_terminator(terminator)?;
         if !self.stack.is_empty() {
-            debug!("// {:?}", self.frame().block);
+            // This should change *something*
+            debug_assert!(self.cur_frame() != old_stack || self.frame().block != old_bb);
+            info!("// {:?}", self.frame().block);
         }
         Ok(())
     }

@@ -1,13 +1,3 @@
-// Copyright 2018 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 use unicode_width::UnicodeWidthChar;
 use super::*;
 
@@ -36,9 +26,9 @@ pub fn analyze_source_file(
     // it encounters. If that point is already outside the source_file, remove
     // it again.
     if let Some(&last_line_start) = lines.last() {
-        let file_map_end = source_file_start_pos + BytePos::from_usize(src.len());
-        assert!(file_map_end >= last_line_start);
-        if last_line_start == file_map_end {
+        let source_file_end = source_file_start_pos + BytePos::from_usize(src.len());
+        assert!(source_file_end >= last_line_start);
+        if last_line_start == source_file_end {
             lines.pop();
         }
     }
@@ -47,8 +37,7 @@ pub fn analyze_source_file(
 }
 
 cfg_if! {
-    if #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"),
-                 not(stage0)))] {
+    if #[cfg(all(any(target_arch = "x86", target_arch = "x86_64")))] {
         fn analyze_source_file_dispatch(src: &str,
                                     source_file_start_pos: BytePos,
                                     lines: &mut Vec<BytePos>,

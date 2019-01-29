@@ -1,16 +1,6 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 //! C definitions used by libnative that don't belong in liblibc
 
-#![allow(bad_style)]
+#![allow(nonstandard_style)]
 #![cfg_attr(test, allow(dead_code))]
 #![unstable(issue = "0", feature = "windows_c")]
 
@@ -113,6 +103,11 @@ pub const FILE_FLAG_BACKUP_SEMANTICS: DWORD = 0x02000000;
 pub const SECURITY_SQOS_PRESENT: DWORD = 0x00100000;
 
 pub const FIONBIO: c_ulong = 0x8004667e;
+
+#[cfg(target_arch = "arm")]
+const ARM_MAX_BREAKPOINTS: usize = 8;
+#[cfg(target_arch = "arm")]
+const ARM_MAX_WATCHPOINTS: usize = 1;
 
 #[repr(C)]
 #[derive(Copy)]
@@ -283,6 +278,9 @@ pub const IMAGE_FILE_MACHINE_AMD64: DWORD = 0x8664;
 #[cfg(target_arch = "aarch64")]
 #[cfg(feature = "backtrace")]
 pub const IMAGE_FILE_MACHINE_ARM64: DWORD = 0xAA64;
+#[cfg(target_arch = "arm")]
+#[cfg(feature = "backtrace")]
+pub const IMAGE_FILE_MACHINE_ARMNT: DWORD = 0x01c4;
 
 pub const EXCEPTION_CONTINUE_SEARCH: LONG = 0;
 pub const EXCEPTION_STACK_OVERFLOW: DWORD = 0xc00000fd;
@@ -300,6 +298,8 @@ pub const PIPE_READMODE_BYTE: DWORD = 0x00000000;
 pub const FD_SETSIZE: usize = 64;
 
 pub const STACK_SIZE_PARAM_IS_A_RESERVATION: DWORD = 0x00010000;
+
+pub const HEAP_ZERO_MEMORY: DWORD = 0x00000008;
 
 #[repr(C)]
 #[cfg(not(target_pointer_width = "64"))]
@@ -789,12 +789,44 @@ pub struct FLOATING_SAVE_AREA {
     _Dummy: [u8; 512] // FIXME: Fill this out
 }
 
+#[cfg(target_arch = "arm")]
+#[repr(C)]
+pub struct CONTEXT {
+    pub ContextFlags: ULONG,
+    pub R0: ULONG,
+    pub R1: ULONG,
+    pub R2: ULONG,
+    pub R3: ULONG,
+    pub R4: ULONG,
+    pub R5: ULONG,
+    pub R6: ULONG,
+    pub R7: ULONG,
+    pub R8: ULONG,
+    pub R9: ULONG,
+    pub R10: ULONG,
+    pub R11: ULONG,
+    pub R12: ULONG,
+    pub Sp: ULONG,
+    pub Lr: ULONG,
+    pub Pc: ULONG,
+    pub Cpsr: ULONG,
+    pub Fpscr: ULONG,
+    pub Padding: ULONG,
+    pub D: [u64; 32],
+    pub Bvr: [ULONG; ARM_MAX_BREAKPOINTS],
+    pub Bcr: [ULONG; ARM_MAX_BREAKPOINTS],
+    pub Wvr: [ULONG; ARM_MAX_WATCHPOINTS],
+    pub Wcr: [ULONG; ARM_MAX_WATCHPOINTS],
+    pub Padding2: [ULONG; 2]
+}
+
 // FIXME(#43348): This structure is used for backtrace only, and a fake
 // definition is provided here only to allow rustdoc to pass type-check. This
 // will not appear in the final documentation. This should be also defined for
 // other architectures supported by Windows such as ARM, and for historical
 // interest, maybe MIPS and PowerPC as well.
-#[cfg(all(dox, not(any(target_arch = "x86_64", target_arch = "x86", target_arch = "aarch64"))))]
+#[cfg(all(rustdoc, not(any(target_arch = "x86_64", target_arch = "x86",
+      target_arch = "aarch64", target_arch = "arm"))))]
 pub enum CONTEXT {}
 
 #[cfg(target_arch = "aarch64")]
@@ -993,9 +1025,6 @@ extern "system" {
 
     pub fn SetLastError(dwErrCode: DWORD);
     pub fn GetCommandLineW() -> *mut LPCWSTR;
-    pub fn LocalFree(ptr: *mut c_void);
-    pub fn CommandLineToArgvW(lpCmdLine: *mut LPCWSTR,
-                              pNumArgs: *mut c_int) -> *mut *mut u16;
     pub fn GetTempPathW(nBufferLength: DWORD,
                         lpBuffer: LPCWSTR) -> DWORD;
     pub fn OpenProcessToken(ProcessHandle: HANDLE,
@@ -1237,6 +1266,11 @@ extern "system" {
 
     #[link_name = "SystemFunction036"]
     pub fn RtlGenRandom(RandomBuffer: *mut u8, RandomBufferLength: ULONG) -> BOOLEAN;
+
+    pub fn GetProcessHeap() -> HANDLE;
+    pub fn HeapAlloc(hHeap: HANDLE, dwFlags: DWORD, dwBytes: SIZE_T) -> LPVOID;
+    pub fn HeapReAlloc(hHeap: HANDLE, dwFlags: DWORD, lpMem: LPVOID, dwBytes: SIZE_T) -> LPVOID;
+    pub fn HeapFree(hHeap: HANDLE, dwFlags: DWORD, lpMem: LPVOID) -> BOOL;
 }
 
 // Functions that aren't available on every version of Windows that we support,

@@ -1,19 +1,10 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 use std::fmt;
 use rustc::hir;
 use rustc::mir::*;
 use rustc::middle::lang_items;
 use rustc::traits::Reveal;
 use rustc::ty::{self, Ty, TyCtxt};
+use rustc::ty::layout::VariantIdx;
 use rustc::ty::subst::Substs;
 use rustc::ty::util::IntTypeExt;
 use rustc_data_structures::indexed_vec::Idx;
@@ -23,8 +14,8 @@ use std::u32;
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum DropFlagState {
-    Present, // i.e. initialized
-    Absent, // i.e. deinitialized or "moved"
+    Present, // i.e., initialized
+    Absent, // i.e., deinitialized or "moved"
 }
 
 impl DropFlagState {
@@ -94,7 +85,7 @@ pub trait DropElaborator<'a, 'tcx: 'a> : fmt::Debug {
 
     fn field_subpath(&self, path: Self::Path, field: Field) -> Option<Self::Path>;
     fn deref_subpath(&self, path: Self::Path) -> Option<Self::Path>;
-    fn downcast_subpath(&self, path: Self::Path, variant: usize) -> Option<Self::Path>;
+    fn downcast_subpath(&self, path: Self::Path, variant: VariantIdx) -> Option<Self::Path>;
     fn array_subpath(&self, path: Self::Path, index: u32, size: u32) -> Option<Self::Path>;
 }
 
@@ -392,7 +383,7 @@ impl<'l, 'b, 'tcx, D> DropCtxt<'l, 'b, 'tcx, D>
             let fields = self.move_paths_for_fields(
                 self.place,
                 self.path,
-                &adt.variants[0],
+                &adt.variants[VariantIdx::new(0)],
                 substs
             );
             self.drop_ladder(fields, succ, unwind)
@@ -416,7 +407,7 @@ impl<'l, 'b, 'tcx, D> DropCtxt<'l, 'b, 'tcx, D>
 
         let mut have_otherwise = false;
 
-        for (variant_index, discr) in adt.discriminants(self.tcx()).enumerate() {
+        for (variant_index, discr) in adt.discriminants(self.tcx()) {
             let subpath = self.elaborator.downcast_subpath(
                 self.path, variant_index);
             if let Some(variant_path) = subpath {
@@ -529,7 +520,7 @@ impl<'l, 'b, 'tcx, D> DropCtxt<'l, 'b, 'tcx, D>
             mutbl: hir::Mutability::MutMutable
         });
         let ref_place = self.new_temp(ref_ty);
-        let unit_temp = Place::Local(self.new_temp(tcx.mk_nil()));
+        let unit_temp = Place::Local(self.new_temp(tcx.mk_unit()));
 
         let result = BasicBlockData {
             statements: vec![self.assign(
@@ -545,8 +536,9 @@ impl<'l, 'b, 'tcx, D> DropCtxt<'l, 'b, 'tcx, D>
                     args: vec![Operand::Move(Place::Local(ref_place))],
                     destination: Some((unit_temp, succ)),
                     cleanup: unwind.into_option(),
+                    from_hir_call: true,
                 },
-                source_info: self.source_info
+                source_info: self.source_info,
             }),
             is_cleanup: unwind.is_cleanup(),
         };
@@ -752,11 +744,11 @@ impl<'l, 'b, 'tcx, D> DropCtxt<'l, 'b, 'tcx, D>
                 self.place.clone()
             )));
             drop_block_stmts.push(self.assign(&cur, Rvalue::Cast(
-                CastKind::Misc, Operand::Move(tmp.clone()), iter_ty
+                CastKind::Misc, Operand::Move(tmp), iter_ty
             )));
             drop_block_stmts.push(self.assign(&length_or_end,
                 Rvalue::BinaryOp(BinOp::Offset,
-                     Operand::Copy(cur.clone()), Operand::Move(length.clone())
+                     Operand::Copy(cur), Operand::Move(length)
             )));
         } else {
             // index = 0 (length already pushed)
@@ -891,9 +883,9 @@ impl<'l, 'b, 'tcx, D> DropCtxt<'l, 'b, 'tcx, D>
         unwind: Unwind
     ) -> BasicBlock {
         let tcx = self.tcx();
-        let unit_temp = Place::Local(self.new_temp(tcx.mk_nil()));
+        let unit_temp = Place::Local(self.new_temp(tcx.mk_unit()));
         let free_func = tcx.require_lang_item(lang_items::BoxFreeFnLangItem);
-        let args = adt.variants[0].fields.iter().enumerate().map(|(i, f)| {
+        let args = adt.variants[VariantIdx::new(0)].fields.iter().enumerate().map(|(i, f)| {
             let field = Field::new(i);
             let field_ty = f.ty(self.tcx(), substs);
             Operand::Move(self.place.clone().field(field, field_ty))
@@ -903,7 +895,8 @@ impl<'l, 'b, 'tcx, D> DropCtxt<'l, 'b, 'tcx, D>
             func: Operand::function_handle(tcx, free_func, substs, self.source_info.span),
             args: args,
             destination: Some((unit_temp, target)),
-            cleanup: None
+            cleanup: None,
+            from_hir_call: false,
         }; // FIXME(#43234)
         let free_block = self.new_block(unwind, call);
 
@@ -970,14 +963,16 @@ impl<'l, 'b, 'tcx, D> DropCtxt<'l, 'b, 'tcx, D>
             span: self.source_info.span,
             ty: self.tcx().types.usize,
             user_ty: None,
-            literal: ty::Const::from_usize(self.tcx(), val.into()),
+            literal: self.tcx().intern_lazy_const(ty::LazyConst::Evaluated(
+                ty::Const::from_usize(self.tcx(), val.into())
+            )),
         })
     }
 
     fn assign(&self, lhs: &Place<'tcx>, rhs: Rvalue<'tcx>) -> Statement<'tcx> {
         Statement {
             source_info: self.source_info,
-            kind: StatementKind::Assign(lhs.clone(), rhs)
+            kind: StatementKind::Assign(lhs.clone(), box rhs)
         }
     }
 }

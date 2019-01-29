@@ -1,13 +1,3 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 //! Freshening is the process of replacing unknown variables with fresh types. The idea is that
 //! the type, after freshening, contains no inference variables but instead contains either a
 //! value for each variable or fresh "arbitrary" types wherever a variable would have been.
@@ -62,7 +52,7 @@ impl<'a, 'gcx, 'tcx> TypeFreshener<'a, 'gcx, 'tcx> {
         TypeFreshener {
             infcx,
             freshen_count: 0,
-            freshen_map: FxHashMap(),
+            freshen_map: Default::default(),
         }
     }
 
@@ -107,14 +97,13 @@ impl<'a, 'gcx, 'tcx> TypeFolder<'gcx, 'tcx> for TypeFreshener<'a, 'gcx, 'tcx> {
             ty::ReFree(_) |
             ty::ReScope(_) |
             ty::ReVar(_) |
-            ty::ReSkolemized(..) |
+            ty::RePlaceholder(..) |
             ty::ReEmpty |
             ty::ReErased => {
                 // replace all free regions with 'erased
                 self.tcx().types.re_erased
             }
 
-            ty::ReCanonical(..) |
             ty::ReClosureBound(..) => {
                 bug!(
                     "encountered unexpected region: {:?}",
@@ -171,9 +160,6 @@ impl<'a, 'gcx, 'tcx> TypeFolder<'gcx, 'tcx> for TypeFreshener<'a, 'gcx, 'tcx> {
                 t
             }
 
-            ty::Infer(ty::CanonicalTy(..)) =>
-                bug!("encountered canonical ty during freshening"),
-
             ty::Generator(..) |
             ty::Bool |
             ty::Char |
@@ -193,13 +179,17 @@ impl<'a, 'gcx, 'tcx> TypeFolder<'gcx, 'tcx> for TypeFreshener<'a, 'gcx, 'tcx> {
             ty::Never |
             ty::Tuple(..) |
             ty::Projection(..) |
+            ty::UnnormalizedProjection(..) |
             ty::Foreign(..) |
             ty::Param(..) |
             ty::Closure(..) |
             ty::GeneratorWitness(..) |
-            ty::Anon(..) => {
+            ty::Opaque(..) => {
                 t.super_fold_with(self)
             }
+
+            ty::Placeholder(..) |
+            ty::Bound(..) => bug!("unexpected type {:?}", t),
         }
     }
 }

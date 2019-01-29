@@ -1,13 +1,3 @@
-// Copyright 2012-2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 use CodeSuggestion;
 use SubstitutionPart;
 use Substitution;
@@ -76,9 +66,9 @@ pub enum StringPart {
 }
 
 impl StringPart {
-    pub fn content(&self) -> String {
+    pub fn content(&self) -> &str {
         match self {
-            &StringPart::Normal(ref s) | & StringPart::Highlighted(ref s) => s.to_owned()
+            &StringPart::Normal(ref s) | & StringPart::Highlighted(ref s) => s
         }
     }
 }
@@ -136,6 +126,17 @@ impl Diagnostic {
     /// called the primary span.
     pub fn span_label<T: Into<String>>(&mut self, span: Span, label: T) -> &mut Self {
         self.span.push_span_label(span, label.into());
+        self
+    }
+
+    pub fn replace_span_with(&mut self, after: Span) -> &mut Self {
+        let before = self.span.clone();
+        self.set_span(after);
+        for span_label in before.span_labels() {
+            if let Some(label) = span_label.label {
+                self.span_label(after, label);
+            }
+        }
         self
     }
 
@@ -228,60 +229,11 @@ impl Diagnostic {
         self
     }
 
-    /// Prints out a message with a suggested edit of the code. If the suggestion is presented
-    /// inline it will only show the text message and not the text.
-    ///
-    /// See `CodeSuggestion` for more information.
-    pub fn span_suggestion_short(&mut self, sp: Span, msg: &str, suggestion: String) -> &mut Self {
-        self.suggestions.push(CodeSuggestion {
-            substitutions: vec![Substitution {
-                parts: vec![SubstitutionPart {
-                    snippet: suggestion,
-                    span: sp,
-                }],
-            }],
-            msg: msg.to_owned(),
-            show_code_when_inline: false,
-            applicability: Applicability::Unspecified,
-        });
-        self
-    }
-
-    /// Prints out a message with a suggested edit of the code.
-    ///
-    /// In case of short messages and a simple suggestion,
-    /// rustc displays it as a label like
-    ///
-    /// "try adding parentheses: `(tup.0).1`"
-    ///
-    /// The message
-    ///
-    /// * should not end in any punctuation (a `:` is added automatically)
-    /// * should not be a question
-    /// * should not contain any parts like "the following", "as shown"
-    /// * may look like "to do xyz, use" or "to do xyz, use abc"
-    /// * may contain a name of a function, variable or type, but not whole expressions
-    ///
-    /// See `CodeSuggestion` for more information.
-    pub fn span_suggestion(&mut self, sp: Span, msg: &str, suggestion: String) -> &mut Self {
-        self.suggestions.push(CodeSuggestion {
-            substitutions: vec![Substitution {
-                parts: vec![SubstitutionPart {
-                    snippet: suggestion,
-                    span: sp,
-                }],
-            }],
-            msg: msg.to_owned(),
-            show_code_when_inline: true,
-            applicability: Applicability::Unspecified,
-        });
-        self
-    }
-
     pub fn multipart_suggestion(
         &mut self,
         msg: &str,
         suggestion: Vec<(Span, String)>,
+        applicability: Applicability,
     ) -> &mut Self {
         self.suggestions.push(CodeSuggestion {
             substitutions: vec![Substitution {
@@ -292,30 +244,29 @@ impl Diagnostic {
             }],
             msg: msg.to_owned(),
             show_code_when_inline: true,
-            applicability: Applicability::Unspecified,
+            applicability,
         });
         self
     }
 
-    /// Prints out a message with multiple suggested edits of the code.
-    pub fn span_suggestions(&mut self, sp: Span, msg: &str, suggestions: Vec<String>) -> &mut Self {
-        self.suggestions.push(CodeSuggestion {
-            substitutions: suggestions.into_iter().map(|snippet| Substitution {
-                parts: vec![SubstitutionPart {
-                    snippet,
-                    span: sp,
-                }],
-            }).collect(),
-            msg: msg.to_owned(),
-            show_code_when_inline: true,
-            applicability: Applicability::Unspecified,
-        });
-        self
-    }
-
-    /// This is a suggestion that may contain mistakes or fillers and should
-    /// be read and understood by a human.
-    pub fn span_suggestion_with_applicability(&mut self, sp: Span, msg: &str,
+    /// Prints out a message with a suggested edit of the code.
+    ///
+    /// In case of short messages and a simple suggestion, rustc displays it as a label:
+    ///
+    /// ```text
+    /// try adding parentheses: `(tup.0).1`
+    /// ```
+    ///
+    /// The message
+    ///
+    /// * should not end in any punctuation (a `:` is added automatically)
+    /// * should not be a question (avoid language like "did you mean")
+    /// * should not contain any phrases like "the following", "as shown", etc.
+    /// * may look like "to do xyz, use" or "to do xyz, use abc"
+    /// * may contain a name of a function, variable, or type, but not whole expressions
+    ///
+    /// See `CodeSuggestion` for more information.
+    pub fn span_suggestion(&mut self, sp: Span, msg: &str,
                                        suggestion: String,
                                        applicability: Applicability) -> &mut Self {
         self.suggestions.push(CodeSuggestion {
@@ -332,11 +283,12 @@ impl Diagnostic {
         self
     }
 
-    pub fn span_suggestions_with_applicability(&mut self, sp: Span, msg: &str,
-                                        suggestions: Vec<String>,
-                                        applicability: Applicability) -> &mut Self {
+    /// Prints out a message with multiple suggested edits of the code.
+    pub fn span_suggestions(&mut self, sp: Span, msg: &str,
+        suggestions: impl Iterator<Item = String>, applicability: Applicability) -> &mut Self
+    {
         self.suggestions.push(CodeSuggestion {
-            substitutions: suggestions.into_iter().map(|snippet| Substitution {
+            substitutions: suggestions.map(|snippet| Substitution {
                 parts: vec![SubstitutionPart {
                     snippet,
                     span: sp,
@@ -349,7 +301,11 @@ impl Diagnostic {
         self
     }
 
-    pub fn span_suggestion_short_with_applicability(
+    /// Prints out a message with a suggested edit of the code. If the suggestion is presented
+    /// inline, it will only show the message and not the suggestion.
+    ///
+    /// See `CodeSuggestion` for more information.
+    pub fn span_suggestion_short(
         &mut self, sp: Span, msg: &str, suggestion: String, applicability: Applicability
     ) -> &mut Self {
         self.suggestions.push(CodeSuggestion {
@@ -381,7 +337,7 @@ impl Diagnostic {
     }
 
     pub fn message(&self) -> String {
-        self.message.iter().map(|i| i.0.to_owned()).collect::<String>()
+        self.message.iter().map(|i| i.0.as_str()).collect::<String>()
     }
 
     pub fn styled_message(&self) -> &Vec<(String, Style)> {
@@ -431,7 +387,7 @@ impl Diagnostic {
 
 impl SubDiagnostic {
     pub fn message(&self) -> String {
-        self.message.iter().map(|i| i.0.to_owned()).collect::<String>()
+        self.message.iter().map(|i| i.0.as_str()).collect::<String>()
     }
 
     pub fn styled_message(&self) -> &Vec<(String, Style)> {

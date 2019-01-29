@@ -1,13 +1,3 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 use ast::{self, NodeId};
 use source_map::{DUMMY_SP, dummy_spanned};
 use ext::base::ExtCtxt;
@@ -16,12 +6,12 @@ use ext::hygiene::Mark;
 use tokenstream::TokenStream;
 use fold::*;
 use ptr::P;
-use OneVector;
+use smallvec::SmallVec;
 use symbol::keywords;
 use ThinVec;
 use util::move_map::MoveMap;
 
-use std::collections::HashMap;
+use rustc_data_structures::fx::FxHashMap;
 
 pub fn placeholder(kind: AstFragmentKind, id: ast::NodeId) -> AstFragment {
     fn mac_placeholder() -> ast::Mac {
@@ -81,7 +71,7 @@ pub fn placeholder(kind: AstFragmentKind, id: ast::NodeId) -> AstFragment {
 }
 
 pub struct PlaceholderExpander<'a, 'b: 'a> {
-    expanded_fragments: HashMap<ast::NodeId, AstFragment>,
+    expanded_fragments: FxHashMap<ast::NodeId, AstFragment>,
     cx: &'a mut ExtCtxt<'b>,
     monotonic: bool,
 }
@@ -90,7 +80,7 @@ impl<'a, 'b> PlaceholderExpander<'a, 'b> {
     pub fn new(cx: &'a mut ExtCtxt<'b>, monotonic: bool) -> Self {
         PlaceholderExpander {
             cx,
-            expanded_fragments: HashMap::new(),
+            expanded_fragments: FxHashMap::default(),
             monotonic,
         }
     }
@@ -115,7 +105,7 @@ impl<'a, 'b> PlaceholderExpander<'a, 'b> {
 }
 
 impl<'a, 'b> Folder for PlaceholderExpander<'a, 'b> {
-    fn fold_item(&mut self, item: P<ast::Item>) -> OneVector<P<ast::Item>> {
+    fn fold_item(&mut self, item: P<ast::Item>) -> SmallVec<[P<ast::Item>; 1]> {
         match item.node {
             ast::ItemKind::Mac(_) => return self.remove(item.id).make_items(),
             ast::ItemKind::MacroDef(_) => return smallvec![item],
@@ -125,21 +115,21 @@ impl<'a, 'b> Folder for PlaceholderExpander<'a, 'b> {
         noop_fold_item(item, self)
     }
 
-    fn fold_trait_item(&mut self, item: ast::TraitItem) -> OneVector<ast::TraitItem> {
+    fn fold_trait_item(&mut self, item: ast::TraitItem) -> SmallVec<[ast::TraitItem; 1]> {
         match item.node {
             ast::TraitItemKind::Macro(_) => self.remove(item.id).make_trait_items(),
             _ => noop_fold_trait_item(item, self),
         }
     }
 
-    fn fold_impl_item(&mut self, item: ast::ImplItem) -> OneVector<ast::ImplItem> {
+    fn fold_impl_item(&mut self, item: ast::ImplItem) -> SmallVec<[ast::ImplItem; 1]> {
         match item.node {
             ast::ImplItemKind::Macro(_) => self.remove(item.id).make_impl_items(),
             _ => noop_fold_impl_item(item, self),
         }
     }
 
-    fn fold_foreign_item(&mut self, item: ast::ForeignItem) -> OneVector<ast::ForeignItem> {
+    fn fold_foreign_item(&mut self, item: ast::ForeignItem) -> SmallVec<[ast::ForeignItem; 1]> {
         match item.node {
             ast::ForeignItemKind::Macro(_) => self.remove(item.id).make_foreign_items(),
             _ => noop_fold_foreign_item(item, self),
@@ -160,7 +150,7 @@ impl<'a, 'b> Folder for PlaceholderExpander<'a, 'b> {
         }
     }
 
-    fn fold_stmt(&mut self, stmt: ast::Stmt) -> OneVector<ast::Stmt> {
+    fn fold_stmt(&mut self, stmt: ast::Stmt) -> SmallVec<[ast::Stmt; 1]> {
         let (style, mut stmts) = match stmt.node {
             ast::StmtKind::Mac(mac) => (mac.1, self.remove(stmt.id).make_stmts()),
             _ => return noop_fold_stmt(stmt, self),

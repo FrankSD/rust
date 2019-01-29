@@ -1,26 +1,17 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 // Type Names for Debug Info.
 
 use common::CodegenCx;
 use rustc::hir::def_id::DefId;
 use rustc::ty::subst::Substs;
 use rustc::ty::{self, Ty};
+use rustc_codegen_ssa::traits::*;
 
 use rustc::hir;
 
 // Compute the name of the type as it should be stored in debuginfo. Does not do
-// any caching, i.e. calling the function twice with the same type will also do
+// any caching, i.e., calling the function twice with the same type will also do
 // the work twice. The `qualified` parameter only affects the first level of the
-// type name, further levels (i.e. type parameters) are always fully qualified.
+// type name, further levels (i.e., type parameters) are always fully qualified.
 pub fn compute_debuginfo_type_name<'a, 'tcx>(cx: &CodegenCx<'a, 'tcx>,
                                              t: Ty<'tcx>,
                                              qualified: bool)
@@ -123,6 +114,8 @@ pub fn push_debuginfo_type_name<'a, 'tcx>(cx: &CodegenCx<'a, 'tcx>,
                 );
                 push_item_name(cx, principal.def_id, false, output);
                 push_type_params(cx, principal.substs, output);
+            } else {
+                output.push_str("dyn '_");
             }
         },
         ty::FnDef(..) | ty::FnPtr(_) => {
@@ -160,7 +153,7 @@ pub fn push_debuginfo_type_name<'a, 'tcx>(cx: &CodegenCx<'a, 'tcx>,
 
             output.push(')');
 
-            if !sig.output().is_nil() {
+            if !sig.output().is_unit() {
                 output.push_str(" -> ");
                 push_debuginfo_type_name(cx, sig.output(), true, output);
             }
@@ -173,12 +166,15 @@ pub fn push_debuginfo_type_name<'a, 'tcx>(cx: &CodegenCx<'a, 'tcx>,
         }
         ty::Error |
         ty::Infer(_) |
+        ty::Placeholder(..) |
+        ty::UnnormalizedProjection(..) |
         ty::Projection(..) |
-        ty::Anon(..) |
+        ty::Bound(..) |
+        ty::Opaque(..) |
         ty::GeneratorWitness(..) |
         ty::Param(_) => {
             bug!("debuginfo: Trying to create type name for \
-                unexpected type: {:?}", t);
+                  unexpected type: {:?}", t);
         }
     }
 

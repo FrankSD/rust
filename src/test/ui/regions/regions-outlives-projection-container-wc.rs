@@ -1,19 +1,10 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
-// ignore-compare-mode-nll
-
 // Test that we are imposing the requirement that every associated
 // type of a bound that appears in the where clause on a struct must
 // outlive the location in which the type appears, even when the
 // constraint is in a where clause not a bound. Issue #22246.
+
+// revisions: ast mir
+//[mir]compile-flags: -Z borrowck=mir
 
 #![allow(dead_code)]
 
@@ -44,7 +35,8 @@ fn with_assoc<'a,'b>() {
     // which is &'b (), must outlive 'a.
 
     let _: &'a WithAssoc<TheType<'b>> = loop { };
-    //~^ ERROR reference has a longer lifetime
+    //[ast]~^ ERROR reference has a longer lifetime
+    //[mir]~^^ ERROR lifetime may not live long enough
 }
 
 fn main() {

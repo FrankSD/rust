@@ -25,12 +25,17 @@ CRATE := cortex-m
 CRATE_URL := https://github.com/rust-embedded/cortex-m
 CRATE_SHA1 := a448e9156e2cb1e556e5441fd65426952ef4b927 # 0.5.0
 
+export RUSTFLAGS := --cap-lints=allow
+
 all:
 	env
 	mkdir -p $(WORK_DIR)
 	-cd $(WORK_DIR) && rm -rf $(CRATE)
 	cd $(WORK_DIR) && bash -x $(HERE)/../git_clone_sha1.sh $(CRATE) $(CRATE_URL) $(CRATE_SHA1)
-	cd $(WORK_DIR) && cd $(CRATE) && $(CARGO) build --target $(TARGET) -v
+	# HACK(eddyb) sets `RUSTC_BOOTSTRAP=1` so Cargo can accept nightly features.
+	# These come from the top-level Rust workspace, that this crate is not a
+	# member of, but Cargo tries to load the workspace `Cargo.toml` anyway.
+	cd $(WORK_DIR) && cd $(CRATE) && env RUSTC_BOOTSTRAP=1 $(CARGO) build --target $(TARGET) -v
 else
 
 all:

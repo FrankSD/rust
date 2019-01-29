@@ -1,13 +1,3 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 // Unit test for the "user substitutions" that are annotated on each
 // node.
 
@@ -39,7 +29,7 @@ fn main() {
     // Here: we only want the `T` to be given, the rest should be variables.
     //
     // (`T` refers to the declaration of `Bazoom`)
-    let x = <_ as Bazoom<u32>>::method::<_>; //~ ERROR [?0, u32, ?1]
+    let x = <_ as Bazoom<u32>>::method::<_>; //~ ERROR [^0, u32, ^1]
     x(&22, 44, 66);
 
     // Here: all are given
@@ -51,7 +41,7 @@ fn main() {
     //
     // (`U` refers to the declaration of `Bazoom`)
     let y = 22_u32;
-    y.method::<u32>(44, 66); //~ ERROR [?0, ?1, u32]
+    y.method::<u32>(44, 66); //~ ERROR [^0, ^1, u32]
 
     // Here: nothing is given, so we don't have any annotation.
     let y = 22_u32;

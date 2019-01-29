@@ -1,13 +1,3 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 #![unstable(feature = "ip", reason = "extra functionality has not been \
                                       scrutinized to the level that it should \
                                       be to be stable",
@@ -338,7 +328,6 @@ impl Ipv4Addr {
     /// let addr = Ipv4Addr::new(127, 0, 0, 1);
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
-    #[rustc_const_unstable(feature = "const_ip")]
     pub const fn new(a: u8, b: u8, c: u8, d: u8) -> Ipv4Addr {
         Ipv4Addr {
             inner: c::in_addr {
@@ -424,7 +413,7 @@ impl Ipv4Addr {
     /// assert_eq!(Ipv4Addr::new(45, 22, 13, 197).is_unspecified(), false);
     /// ```
     #[stable(feature = "ip_shared", since = "1.12.0")]
-    pub fn is_unspecified(&self) -> bool {
+    pub const fn is_unspecified(&self) -> bool {
         self.inner.s_addr == 0
     }
 
@@ -852,7 +841,7 @@ impl From<[u8; 4]> for IpAddr {
 impl Ipv6Addr {
     /// Creates a new IPv6 address from eight 16-bit segments.
     ///
-    /// The result will represent the IP address a:b:c:d:e:f:g:h.
+    /// The result will represent the IP address `a:b:c:d:e:f:g:h`.
     ///
     /// # Examples
     ///
@@ -862,7 +851,6 @@ impl Ipv6Addr {
     /// let addr = Ipv6Addr::new(0, 0, 0, 0, 0, 0xffff, 0xc00a, 0x2ff);
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
-    #[rustc_const_unstable(feature = "const_ip")]
     pub const fn new(a: u16, b: u16, c: u16, d: u16, e: u16, f: u16,
                      g: u16, h: u16) -> Ipv6Addr {
         Ipv6Addr {
@@ -1224,7 +1212,7 @@ impl Ipv6Addr {
     ///            [255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     /// ```
     #[stable(feature = "ipv6_to_octets", since = "1.12.0")]
-    pub fn octets(&self) -> [u8; 16] {
+    pub const fn octets(&self) -> [u8; 16] {
         self.inner.s6_addr
     }
 }
